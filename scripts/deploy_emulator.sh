@@ -21,7 +21,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 usage() {
 	cat <<'EOF'
-aurora-godot-port-kit — deploy an RPM to the Aurora OS emulator
+godot-to-aurora — deploy an RPM to the Aurora OS emulator
 
 USAGE
   deploy_emulator.sh [options]
@@ -169,8 +169,8 @@ find_rpm() {
 	[[ -z "$newest" ]] && newest="$(newest_rpm_in "$BUILD_DIR/rpmbuild/RPMS")"
 	[[ -n "$newest" ]] || kit_die "no RPM found under $BUILD_DIR/rpmbuild/RPMS.
 Build one first:
-  ./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh     # emulator
-  ./aurora-godot-port-kit/scripts/build_aarch64_rpm.sh    # device
+  ./godot-to-aurora/scripts/build_x86_64_rpm.sh     # emulator
+  ./godot-to-aurora/scripts/build_aarch64_rpm.sh    # device
 or pass --rpm /path/to/package.rpm"
 	printf '%s\n' "$newest"
 }

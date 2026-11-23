@@ -205,7 +205,7 @@ readelf -d auroraos_release.x86_64 | grep -Ei 'wayland|libEGL'                  
 3. `rpmbuild --target aarch64-meego-linux-gnu` запускается в образе SDK 5.2.
 
 ```bash
-./aurora-godot-port-kit/scripts/build_aarch64_rpm.sh
+./godot-to-aurora/scripts/build_aarch64_rpm.sh
 ```
 
 Такой пакет не содержит приватную `libxkbcommon`: arm64-библиотеки в x86_64-образе нет, а
@@ -386,7 +386,7 @@ sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec journalctl -f
 ./scripts/build_x86_64_rpm.sh --check
 
 # шаблон без X11
-readelf -d ~/.local/share/aurora-godot-port-kit/engine/auroraos_release.x86_64 \
+readelf -d ~/.local/share/godot-to-aurora/engine/auroraos_release.x86_64 \
   | grep -Ei 'libX11|libxcb|libdecor'   # пусто
 
 # содержимое RPM

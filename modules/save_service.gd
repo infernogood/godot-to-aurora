@@ -4,7 +4,7 @@ extends Node
 ## Register it in project.godot:
 ##
 ##   [autoload]
-##   SaveService="*res://aurora-godot-port-kit/modules/save_service.gd"
+##   SaveService="*res://godot-to-aurora/modules/save_service.gd"
 ##
 ## Then:
 ##

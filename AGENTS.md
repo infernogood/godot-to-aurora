@@ -2,9 +2,9 @@
 
 Ты — senior-инженер по портированию игр на Godot 4 и системный инженер мобильного
 Linux (ОС Аврора 5.x / Sailfish-стек). Этот файл — твоя рабочая инструкция. Пользователь
-один раз кладёт каталог `aurora-godot-port-kit/` в корень своей игры и говорит:
+один раз кладёт каталог `godot-to-aurora/` в корень своей игры и говорит:
 
-> «Изучи `aurora-godot-port-kit/AGENTS.md` и портируй мою игру на ОС Аврора».
+> «Изучи `godot-to-aurora/AGENTS.md` и портируй мою игру на ОС Аврора».
 
 Дальше ты проходишь путь сам: аудит → `PLAN.md` → правки кода/UI → сборка `.pck` →
 подписанный RPM для эмулятора `x86_64` → (если есть устройство) RPM для `aarch64` →
@@ -47,7 +47,7 @@ Linux (ОС Аврора 5.x / Sailfish-стек). Этот файл — тво�
 | Пакетный менеджер `ru.omp.APM` | RPM обязан быть подписан доверенным сертификатом |
 | SDK 5.2+ | нет `sb2`/`mb2`/`sfdk engine`; сборка в Docker-образе `aurora-build-tools-*` через `<sdk>/tools/run` |
 
-Все инструменты и точные команды уже есть в `aurora-godot-port-kit/scripts/` и
+Все инструменты и точные команды уже есть в `godot-to-aurora/scripts/` и
 `docs/SDK_5_2_ARCHITECTURE.md`. Не изобретай альтернативный тулчейн, пока не прочитаешь их.
 
 ---
@@ -121,16 +121,16 @@ Vulkan-only шейдеры/фичи, требование X11, запись в `
 
 ```bash
 # из локального архива (например, из ранее собранного aurora-export/engine)
-./aurora-godot-port-kit/scripts/fetch_engine.sh --from-dir /path/to/engine
+./godot-to-aurora/scripts/fetch_engine.sh --from-dir /path/to/engine
 
 # или из GitHub Releases кита
-AURORA_KIT_REPO=<owner>/aurora-godot-port-kit ./aurora-godot-port-kit/scripts/fetch_engine.sh
+AURORA_KIT_REPO=<owner>/godot-to-aurora ./godot-to-aurora/scripts/fetch_engine.sh
 
 # проверить, что всё на месте
-./aurora-godot-port-kit/scripts/fetch_engine.sh --check
+./godot-to-aurora/scripts/fetch_engine.sh --check
 ```
 
-Скрипт кладёт бинарники в `~/.local/share/aurora-godot-port-kit/engine`, а `arm64`-шаблоны —
+Скрипт кладёт бинарники в `~/.local/share/godot-to-aurora/engine`, а `arm64`-шаблоны —
 в `~/.local/share/godot/export_templates/4.7.2.stable/`, после чего экспортёр Авроры
 находит их автоматически.
 
@@ -138,7 +138,7 @@ AURORA_KIT_REPO=<owner>/aurora-godot-port-kit ./aurora-godot-port-kit/scripts/fe
 (см. `docs/SDK_5_2_ARCHITECTURE.md`). Проверка готовности:
 
 ```bash
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --check
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --check
 ```
 
 ### 3.2. Настрой `project.godot`
@@ -176,7 +176,7 @@ theme/custom_font="res://assets/fonts/<ваш-моноширинный>.ttf"
 После смены сжатия текстур переимпортируй ресурсы:
 
 ```bash
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --pck-only --import
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --pck-only --import
 # или вручную:
 <enginedir>/Godot_v4.7.2-auroraos1_linux.x86_64 --headless --path . --import
 ```
@@ -188,8 +188,8 @@ theme/custom_font="res://assets/fonts/<ваш-моноширинный>.ttf"
 
 ```bash
 mkdir -p assets/fonts
-cp aurora-godot-port-kit/modules/fonts/*.ttf assets/fonts/
-cp aurora-godot-port-kit/modules/fonts/LICENSE* assets/fonts/
+cp godot-to-aurora/modules/fonts/*.ttf assets/fonts/
+cp godot-to-aurora/modules/fonts/LICENSE* assets/fonts/
 ```
 
 Liberation Mono / Sans / Sans Bold покрывают кириллицу, `«»`, тире, `№`, `→`. Замени
@@ -393,7 +393,7 @@ func _drag_threshold() -> float:
 Кит создаёт пресет сам, если его нет:
 
 ```bash
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --write-preset
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --write-preset
 ```
 
 Параметры берутся из `export_presets.cfg` (`package/organization`, `package/name`,
@@ -438,7 +438,7 @@ exclude_filter="docs/*, tests/*, utilities/*, tools/*, build/*, addons/*"
 ### 5.3. RPM для эмулятора (x86_64)
 
 ```bash
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh
+./godot-to-aurora/scripts/build_x86_64_rpm.sh
 ```
 
 Что произойдёт:
@@ -457,10 +457,10 @@ exclude_filter="docs/*, tests/*, utilities/*, tools/*, build/*, addons/*"
 Полезные режимы:
 
 ```bash
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --check          # только диагностика
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --pck-only       # PCK + иконки, без RPM
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --skip-template  # не собирать шаблон
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --force-preset   # пересоздать пресет
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --check          # только диагностика
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --pck-only       # PCK + иконки, без RPM
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --skip-template  # не собирать шаблон
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --force-preset   # пересоздать пресет
 ```
 
 Шаблон x86_64 в релизах кита уже собран. Если его нет, скрипт соберёт его в образе
@@ -479,7 +479,7 @@ sudo setfacl -m u:$USER:rw /dev/kvm           # либо usermod -aG kvm,render 
 Затем одной командой:
 
 ```bash
-./aurora-godot-port-kit/scripts/deploy_emulator.sh
+./godot-to-aurora/scripts/deploy_emulator.sh
 ```
 
 Скрипт:
@@ -509,7 +509,7 @@ sudo setfacl -m u:$USER:rw /dev/kvm           # либо usermod -aG kvm,render 
 2. Собери aarch64-RPM:
 
 ```bash
-./aurora-godot-port-kit/scripts/build_aarch64_rpm.sh
+./godot-to-aurora/scripts/build_aarch64_rpm.sh
 # это обёртка над build_x86_64_rpm.sh --arch aarch64; параметры пакета те же
 ```
 
@@ -526,7 +526,7 @@ docker run --rm -v "$PWD/build:/build:ro" --entrypoint /bin/bash \
 4. Подпиши и установи на устройство в режиме разработчика:
 
 ```bash
-./aurora-godot-port-kit/scripts/deploy_emulator.sh \
+./godot-to-aurora/scripts/deploy_emulator.sh \
   --rpm build/rpmbuild/RPMS/aarch64/<pkg>-*.aarch64.rpm --device "<имя устройства>"
 ```
 
@@ -628,7 +628,7 @@ patchelf --print-rpath build/rpmbuild/files/usr/bin/<pkg>
 ## 9. Карта файлов кита
 
 ```
-aurora-godot-port-kit/
+godot-to-aurora/
 ├── AGENTS.md                     этот плейбук
 ├── README.md                     быстрый старт для человека
 ├── scripts/

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 #
-# aurora-godot-port-kit — shared helpers.
+# godot-to-aurora — shared helpers.
 #
 # This file is sourced by fetch_engine.sh, build_x86_64_rpm.sh and
 # deploy_emulator.sh. It never runs on its own.
@@ -112,7 +112,7 @@ kit_download() {
 # Game project discovery
 # ---------------------------------------------------------------------------
 # The kit is meant to be copied into the root of a Godot project as
-# "aurora-godot-port-kit/". It also works when its contents are copied directly
+# "godot-to-aurora/". It also works when its contents are copied directly
 # into the project root. GAME_DIR overrides both cases.
 kit_project_root() {
 	local dir
@@ -131,7 +131,7 @@ kit_project_root() {
 		printf '%s\n' "$dir"
 		return 0
 	fi
-	kit_die "project.godot not found. Put aurora-godot-port-kit/ into the root of your Godot project, or set GAME_DIR=/path/to/game."
+	kit_die "project.godot not found. Put godot-to-aurora/ into the root of your Godot project, or set GAME_DIR=/path/to/game."
 }
 
 # kit_read_project_setting <section/key> [default]
@@ -644,7 +644,7 @@ kit_patch_exclude_filter() {
 # Engine binaries
 # ---------------------------------------------------------------------------
 kit_engine_dir() {
-	printf '%s\n' "${AURORA_KIT_ENGINE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aurora-godot-port-kit/engine}"
+	printf '%s\n' "${AURORA_KIT_ENGINE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/godot-to-aurora/engine}"
 }
 
 kit_find_godot() {
@@ -831,7 +831,7 @@ kit_require_python_free_tools() {
 }
 
 kit_version_banner() {
-	printf 'aurora-godot-port-kit %s\n' "$KIT_VERSION"
+	printf 'godot-to-aurora %s\n' "$KIT_VERSION"
 }
 
 # end of common.sh

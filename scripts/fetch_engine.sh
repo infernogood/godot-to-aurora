@@ -48,7 +48,7 @@ CHECKSUM=1
 
 usage() {
 	cat <<EOF
-aurora-godot-port-kit — fetch the Aurora Godot engine binaries
+godot-to-aurora — fetch the Aurora Godot engine binaries
 
 USAGE
   fetch_engine.sh [options]
@@ -79,7 +79,7 @@ DESTINATION
 REPOSITORY
   Set AURORA_KIT_REPO=owner/repo (and optionally AURORA_KIT_RELEASE_TAG) once
   the kit is published on GitHub:
-      AURORA_KIT_REPO=you/aurora-godot-port-kit ./fetch_engine.sh
+      AURORA_KIT_REPO=you/godot-to-aurora ./fetch_engine.sh
   Or point AURORA_KIT_RELEASES_URL directly at a release download base URL.
 
 EXAMPLES
@@ -87,7 +87,7 @@ EXAMPLES
   ./scripts/fetch_engine.sh --from-dir ~/AuroraProjects/aurora-export/engine
 
   # From the kit's GitHub Releases
-  AURORA_KIT_REPO=you/aurora-godot-port-kit ./scripts/fetch_engine.sh
+  AURORA_KIT_REPO=you/godot-to-aurora ./scripts/fetch_engine.sh
 
   # Verify and print paths
   ./scripts/fetch_engine.sh --check --print-paths
@@ -404,5 +404,5 @@ Paths for the other scripts (they auto-detect these):
   AURORA_TEMPLATE="$DEST/$X64_ASSET"
 
 Next:
-  ./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --check
+  ./godot-to-aurora/scripts/build_x86_64_rpm.sh --check
 EOF

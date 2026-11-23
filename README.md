@@ -15,7 +15,7 @@ Sailjail, `fontconfig=no`, подписи RPM и QEMU-эмулятора уже 
 ## English summary
 
 An agent-first porting kit for Godot 4 games on Aurora OS (Russian mobile Linux).
-Drop `aurora-godot-port-kit/` into your project, point your coding agent at `AGENTS.md`,
+Drop `godot-to-aurora/` into your project, point your coding agent at `AGENTS.md`,
 and it will audit the game, adapt UI/fonts/input/lifecycle, build a signed x86_64 RPM for
 the QEMU emulator, and a signed aarch64 RPM for devices. It encodes the real-world SDK 5.2
 constraints: no sb2/mb2, Docker `tools/run` build environment, Wayland-only engine fork,
@@ -30,8 +30,8 @@ saves, `rpmsign-external` with SDK test keys, and APM installation over D-Bus.
 
 ```bash
 cd /path/to/your-godot-game
-git clone <этот-репозиторий> aurora-godot-port-kit
-# или распакуй архив в aurora-godot-port-kit/
+git clone <этот-репозиторий> godot-to-aurora
+# или распакуй архив в godot-to-aurora/
 ```
 
 Не переименовывай каталог без необходимости: агентские команды и подсказки в документации

@@ -27,7 +27,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 usage() {
 	cat <<'EOF'
-aurora-godot-port-kit — build an x86_64 or aarch64 RPM for Aurora OS
+godot-to-aurora — build an x86_64 or aarch64 RPM for Aurora OS
 
 USAGE
   build_x86_64_rpm.sh [--arch x86_64|aarch64] [options]
@@ -164,7 +164,7 @@ PCK_PATH="$BUILD_DIR/$PKG_FULL.pck"
 SPEC_PATH="$RPMBUILD/SPECS/$PKG_FULL.spec"
 LIBDIR_IN_PACKAGE="/usr/share/$PKG_FULL/lib"
 
-kit_log "aurora-godot-port-kit $KIT_VERSION — $RPM_ARCH RPM for Aurora OS"
+kit_log "godot-to-aurora $KIT_VERSION — $RPM_ARCH RPM for Aurora OS"
 kit_print_params
 
 editor=""
@@ -278,7 +278,7 @@ preset_name="$PKG_PRESET_NAME"
 # Template
 # ---------------------------------------------------------------------------
 cleanup_container() {
-	local name="${AURORA_BUILD_CONTAINER:-aurora-godot-port-kit-build}"
+	local name="${AURORA_BUILD_CONTAINER:-godot-to-aurora-build}"
 	if kit_has docker; then
 		docker rm -f "$name" >/dev/null 2>&1 || true
 	fi
@@ -342,7 +342,7 @@ template_scons_args() {
 build_template_docker() {
 	local src="$AURORA_WORKSPACE/godot-$KIT_GODOT_TAG"
 	local extra="${AURORA_EXTRA_DIR:-$AURORA_WORKSPACE/extra}"
-	local container="${AURORA_BUILD_CONTAINER:-aurora-godot-port-kit-build}"
+	local container="${AURORA_BUILD_CONTAINER:-godot-to-aurora-build}"
 	mkdir -p "$AURORA_WORKSPACE"
 	if [[ ! -d "$src/.git" ]]; then
 		kit_has git || kit_die "git is required to fetch the Godot fork sources."
@@ -706,7 +706,7 @@ cat <<EOF
 
 Next steps:
   * sign and install:
-      ./aurora-godot-port-kit/scripts/deploy_emulator.sh --rpm "$rpm_path"
+      ./godot-to-aurora/scripts/deploy_emulator.sh --rpm "$rpm_path"
   * for aarch64 pass --device "<name>" to install on a real device; for x86_64
     the deploy script starts the QEMU emulator automatically.
 EOF

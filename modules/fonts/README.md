@@ -14,8 +14,8 @@ license files:
 
 ```bash
 mkdir -p assets/fonts
-cp aurora-godot-port-kit/modules/fonts/*.ttf assets/fonts/
-cp aurora-godot-port-kit/modules/fonts/LICENSE* assets/fonts/
+cp godot-to-aurora/modules/fonts/*.ttf assets/fonts/
+cp godot-to-aurora/modules/fonts/LICENSE* assets/fonts/
 ```
 
 Then:

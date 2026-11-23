@@ -60,7 +60,7 @@ sha256sum Godot_v4.7.2-auroraos1_linux.x86_64 auroraos_release.x86_64 \
 Или установи движок через кит и попроси его:
 
 ```bash
-./aurora-godot-port-kit/scripts/fetch_engine.sh --from-dir ~/release-assets \
+./godot-to-aurora/scripts/fetch_engine.sh --from-dir ~/release-assets \
   --dest ~/release-assets/installed --no-templates --write-sums
 ```
 
@@ -80,7 +80,7 @@ gh release create "$TAG" \
   ~/release-assets/auroraos_debug.arm64 \
   ~/release-assets/SHA256SUMS \
   --title "Godot 4.7.2 AuroraOS toolchain" \
-  --notes "Aurora-enabled Godot editor and export templates used by aurora-godot-port-kit."
+  --notes "Aurora-enabled Godot editor and export templates used by godot-to-aurora."
 ```
 
 Без `gh` можно создать релиз в веб-интерфейсе GitHub и прикрепить те же пять файлов.
@@ -88,7 +88,7 @@ gh release create "$TAG" \
 Проверь, что assets доступны:
 
 ```bash
-curl -I https://github.com/<owner>/aurora-godot-port-kit/releases/download/engine-4.7.2-auroraos1/SHA256SUMS
+curl -I https://github.com/<owner>/godot-to-aurora/releases/download/engine-4.7.2-auroraos1/SHA256SUMS
 ```
 
 ---
@@ -99,11 +99,11 @@ curl -I https://github.com/<owner>/aurora-godot-port-kit/releases/download/engin
 
 ```bash
 # 1) переменная репозитория (рекомендуется)
-AURORA_KIT_REPO=<owner>/aurora-godot-port-kit ./scripts/fetch_engine.sh
+AURORA_KIT_REPO=<owner>/godot-to-aurora ./scripts/fetch_engine.sh
 
 # 2) прямой URL релиза
 ./scripts/fetch_engine.sh \
-  --release-base https://github.com/<owner>/aurora-godot-port-kit/releases/download/engine-4.7.2-auroraos1
+  --release-base https://github.com/<owner>/godot-to-aurora/releases/download/engine-4.7.2-auroraos1
 ```
 
 Тег по умолчанию — `engine-4.7.2-auroraos1`; переопределяется `AURORA_KIT_RELEASE_TAG`
@@ -111,7 +111,7 @@ AURORA_KIT_REPO=<owner>/aurora-godot-port-kit ./scripts/fetch_engine.sh
 
 `fetch_engine.sh` сам скачает `SHA256SUMS`, проверит файлы и установит:
 
-* редактор и шаблоны — в `~/.local/share/aurora-godot-port-kit/engine/`;
+* редактор и шаблоны — в `~/.local/share/godot-to-aurora/engine/`;
 * `auroraos_release.arm64` и `auroraos_debug.arm64` — в
   `~/.local/share/godot/export_templates/4.7.2.stable/`.
 
@@ -119,12 +119,12 @@ AURORA_KIT_REPO=<owner>/aurora-godot-port-kit ./scripts/fetch_engine.sh
 
 ```bash
 TMPH=$(mktemp -d)
-AURORA_KIT_REPO=<owner>/aurora-godot-port-kit \
+AURORA_KIT_REPO=<owner>/godot-to-aurora \
 XDG_DATA_HOME="$TMPH" \
   ./scripts/fetch_engine.sh
 
 XDG_DATA_HOME="$TMPH" ./scripts/fetch_engine.sh --check
-ls -lh "$TMPH/aurora-godot-port-kit/engine" "$TMPH/godot/export_templates/4.7.2.stable"
+ls -lh "$TMPH/godot-to-aurora/engine" "$TMPH/godot/export_templates/4.7.2.stable"
 rm -rf "$TMPH"
 ```
 

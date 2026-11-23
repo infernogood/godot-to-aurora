@@ -4,7 +4,7 @@ extends Node
 ## Register it in project.godot:
 ##
 ##   [autoload]
-##   AuroraLifecycle="*res://aurora-godot-port-kit/modules/aurora_lifecycle.gd"
+##   AuroraLifecycle="*res://godot-to-aurora/modules/aurora_lifecycle.gd"
 ##
 ##   # somewhere in your main scene:
 ##   func _ready() -> void:
