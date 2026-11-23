@@ -1,0 +1,35 @@
+# Build artifacts
+build/
+build-*/
+*.rpm
+*.pck
+*.part
+
+# Engine binaries and export templates (published via GitHub Releases)
+utilities/
+engine/
+Godot_v*
+auroraos_*.x86_64
+auroraos_*.arm64
+auroraos_*.arm32
+
+# Aurora SDK caches / keys
+.env.list
+*.pem
+*.key
+*.p12
+build/.signing/
+
+# Godot
+.godot/
+*.translation
+export_presets.cfg.bak.*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+__pycache__/
+*.pyc

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=@APP_TITLE@
+Comment=@APP_COMMENT@
+Icon=@PKG_NAME@
+Exec=@PKG_NAME@ --main-pack /usr/share/@PKG_NAME@/@PKG_NAME@.pck --display-driver wayland --rendering-driver opengl3
+X-Nemo-Application-Type=no-invoker
+Categories=@APP_CATEGORIES@
+Terminal=false
+
+[X-Application]
+Permissions=@PERMISSIONS@
+OrganizationName=@ORG@
+ApplicationName=@APP@
+
+[X-Aurora-Application]
+Orientation=@ORIENTATION@
+IconMode=Scale
