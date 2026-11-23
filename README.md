@@ -1,4 +1,4 @@
-# aurora-godot-port-kit
+# godot-to-aurora
 
 [English summary](#english-summary) · [Быстрый старт](#быстрый-старт) · [Документация](#документация)
 
@@ -35,13 +35,13 @@ git clone <этот-репозиторий> aurora-godot-port-kit
 ```
 
 Не переименовывай каталог без необходимости: агентские команды и подсказки в документации
-используют имя `aurora-godot-port-kit/`. Скрипты работают и при копировании содержимого
+используют имя `godot-to-aurora/`. Скрипты работают и при копировании содержимого
 прямо в корень проекта.
 
 ### 2. Подготовь движок
 
 ```bash
-./aurora-godot-port-kit/scripts/fetch_engine.sh --from-dir /path/to/engine
+./godot-to-aurora/scripts/fetch_engine.sh --from-dir /path/to/engine
 ```
 
 Нужны Aurora-сборка Godot (`Godot_v4.7.2-auroraos1_linux.x86_64`) и шаблоны
@@ -49,7 +49,7 @@ git clone <этот-репозиторий> aurora-godot-port-kit
 опубликованы в GitHub Releases кита:
 
 ```bash
-AURORA_KIT_REPO=<owner>/aurora-godot-port-kit ./aurora-godot-port-kit/scripts/fetch_engine.sh
+AURORA_KIT_REPO=<owner>/godot-to-aurora ./godot-to-aurora/scripts/fetch_engine.sh
 ```
 
 Подробности публикации — в [docs/RELEASES_GUIDE.md](docs/RELEASES_GUIDE.md).
@@ -57,7 +57,7 @@ AURORA_KIT_REPO=<owner>/aurora-godot-port-kit ./aurora-godot-port-kit/scripts/fe
 ### 3. Позови агента
 
 ```text
-Изучи aurora-godot-port-kit/AGENTS.md и портируй мою игру на ОС Аврора.
+Изучи godot-to-aurora/AGENTS.md и портируй мою игру на ОС Аврора.
 ```
 
 Агент создаст `PLAN.md`, внесёт правки, соберёт RPM и проверит игру в эмуляторе.
@@ -83,7 +83,7 @@ AURORA_KIT_REPO=<owner>/aurora-godot-port-kit ./aurora-godot-port-kit/scripts/fe
 Проверить окружение целиком:
 
 ```bash
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --check
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --check
 ```
 
 ---
@@ -91,7 +91,7 @@ AURORA_KIT_REPO=<owner>/aurora-godot-port-kit ./aurora-godot-port-kit/scripts/fe
 ## Что делает кит
 
 ```
-aurora-godot-port-kit/
+godot-to-aurora/
 ├── AGENTS.md                     плейбук для ИИ-агента: аудит → PLAN.md → код → RPM → проверка
 ├── README.md
 ├── .gitignore                    build/, *.rpm, движок, ключи — вне Git
@@ -135,16 +135,16 @@ export PERMISSIONS="Audio,Internet"
 export ORIENTATION=Landscape
 
 # 2. диагностика
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh --check
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --check
 
 # 3. PCK + RPM для эмулятора (первый запуск переимпортирует ресурсы)
-./aurora-godot-port-kit/scripts/build_x86_64_rpm.sh
+./godot-to-aurora/scripts/build_x86_64_rpm.sh
 
 # 3b. RPM для реального устройства
-./aurora-godot-port-kit/scripts/build_aarch64_rpm.sh
+./godot-to-aurora/scripts/build_aarch64_rpm.sh
 
 # 4. подпись и установка в эмулятор
-./aurora-godot-port-kit/scripts/deploy_emulator.sh
+./godot-to-aurora/scripts/deploy_emulator.sh
 
 # 5. запусти игру с иконки в меню эмулятора и смотри логи
 sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec journalctl -f -t ru.example.mygame
@@ -237,10 +237,10 @@ SaveService="*res://scripts/aurora/save_service.gd"
 x86_64, но с шаблоном `auroraos_release.arm64` и `rpmbuild --target aarch64-meego-linux-gnu`:
 
 ```bash
-./aurora-godot-port-kit/scripts/build_aarch64_rpm.sh
+./godot-to-aurora/scripts/build_aarch64_rpm.sh
 # = build_x86_64_rpm.sh --arch aarch64
 
-./aurora-godot-port-kit/scripts/deploy_emulator.sh \
+./godot-to-aurora/scripts/deploy_emulator.sh \
   --rpm build/rpmbuild/RPMS/aarch64/<pkg>-*.aarch64.rpm --device "<имя>"
 ```
 
