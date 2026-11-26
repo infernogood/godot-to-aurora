@@ -88,22 +88,25 @@ gh release create "$TAG" \
 Проверь, что assets доступны:
 
 ```bash
-curl -I https://github.com/<owner>/godot-to-aurora/releases/download/engine-4.7.2-auroraos1/SHA256SUMS
+curl -I https://github.com/infernogood/godot-to-aurora/releases/download/engine-4.7.2-auroraos1/SHA256SUMS
 ```
 
 ---
 
 ## 5. Настрой скрипт у других пользователей
 
-`fetch_engine.sh` не знает владельца репозитория, пока ты его не укажешь. Два способа:
+`fetch_engine.sh` по умолчанию использует текущий репозиторий:
 
 ```bash
-# 1) переменная репозитория (рекомендуется)
-AURORA_KIT_REPO=<owner>/godot-to-aurora ./scripts/fetch_engine.sh
+# 1) стандартный релиз текущего репозитория (рекомендуется)
+./scripts/fetch_engine.sh
 
-# 2) прямой URL релиза
+# 2) другой репозиторий через переменную
+AURORA_KIT_REPO=other-owner/godot-to-aurora ./scripts/fetch_engine.sh
+
+# 3) прямой URL релиза
 ./scripts/fetch_engine.sh \
-  --release-base https://github.com/<owner>/godot-to-aurora/releases/download/engine-4.7.2-auroraos1
+  --release-base https://github.com/infernogood/godot-to-aurora/releases/download/engine-4.7.2-auroraos1
 ```
 
 Тег по умолчанию — `engine-4.7.2-auroraos1`; переопределяется `AURORA_KIT_RELEASE_TAG`

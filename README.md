@@ -49,7 +49,7 @@ git clone <этот-репозиторий> godot-to-aurora
 опубликованы в GitHub Releases кита:
 
 ```bash
-AURORA_KIT_REPO=<owner>/godot-to-aurora ./godot-to-aurora/scripts/fetch_engine.sh
+./godot-to-aurora/scripts/fetch_engine.sh
 ```
 
 Подробности публикации — в [docs/RELEASES_GUIDE.md](docs/RELEASES_GUIDE.md).

@@ -36,6 +36,7 @@ TEMPLATES_DIR="${GODOT_EXPORT_TEMPLATES_DIR:-${XDG_DATA_HOME:-$HOME/.local/share
 SOURCE_DIR=""
 RELEASE_BASE=""
 RELEASE_TAG="${AURORA_KIT_RELEASE_TAG:-engine-4.7.2-auroraos1}"
+AURORA_KIT_REPO="${AURORA_KIT_REPO:-infernogood/godot-to-aurora}"
 MODE="auto"
 FORCE=0
 DRY_RUN=0
@@ -175,7 +176,7 @@ else
 		RELEASE_BASE="${AURORA_KIT_RELEASES_URL%/}"
 	fi
 	if [[ -z "$RELEASE_BASE" && -n "${AURORA_KIT_REPO:-}" ]]; then
-		RELEASE_BASE="https://github.com/${AURORA_KIT_REPO}/releases/download/${RELEASE_TAG}"
+		RELEASE_BASE="https://github.com/${AURORA_KIT_REPO:-infernogood/godot-to-aurora}/releases/download/${RELEASE_TAG}"
 	fi
 	if [[ -n "$RELEASE_BASE" ]]; then
 		MODE="release"
