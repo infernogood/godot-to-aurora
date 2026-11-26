@@ -7,8 +7,9 @@
 UI/шрифтов/жизненного цикла, `.pck`, подписанный RPM для эмулятора `x86_64` и (при наличии
 устройства) `aarch64`.
 
-Собран из реального опыта переноса игры: все «грабли» Аврора SDK 5.2, Wayland/GLES3,
+Собран из реального опыта переноса игр: все «грабли» Аврора SDK 5.2, Wayland/GLES3,
 Sailjail, `fontconfig=no`, подписи RPM и QEMU-эмулятора уже зашиты в скрипты и шаблоны.
+История изменений — в [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -36,32 +37,57 @@ git clone <этот-репозиторий> godot-to-aurora
 
 Не переименовывай каталог без необходимости: агентские команды и подсказки в документации
 используют имя `godot-to-aurora/`. Скрипты работают и при копировании содержимого
-прямо в корень проекта.
+прямо в корень проекта. В корне кита лежит `.gdignore`, поэтому Godot не сканирует его
+на месте — модули и шрифты нужно скопировать в проект (шаг 2).
 
-### 2. Подготовь движок
+### 2. Подключи модули (единственный канонический путь)
+
+```bash
+mkdir -p scripts/aurora assets/fonts
+cp godot-to-aurora/modules/*.gd          scripts/aurora/
+cp godot-to-aurora/modules/fonts/*.ttf   assets/fonts/
+cp godot-to-aurora/modules/fonts/LICENSE assets/fonts/
+```
+
+Автозагрузки в `project.godot`:
+
+```ini
+[autoload]
+AuroraLifecycle="*res://scripts/aurora/aurora_lifecycle.gd"
+SaveService="*res://scripts/aurora/save_service.gd"
+```
+
+Ссылки на `res://godot-to-aurora/modules/...` не используй: движок импортирует шрифты
+дважды, а `class_name` даст ошибку `Class "AuroraSafeArea" hides a global script class`.
+
+### 3. Подготовь движок
 
 ```bash
 ./godot-to-aurora/scripts/fetch_engine.sh --from-dir /path/to/engine
 ```
 
 Нужны Aurora-сборка Godot (`Godot_v4.7.2-auroraos1_linux.x86_64`) и шаблоны
-`auroraos_release.arm64`, `auroraos_debug.arm64`, `auroraos_release.x86_64`. Если они уже
+`auroraos_release.x86_64`, `auroraos_release.arm64`, `auroraos_debug.arm64`. Если они уже
 опубликованы в GitHub Releases кита:
 
 ```bash
-AURORA_KIT_REPO=<owner>/godot-to-aurora ./godot-to-aurora/scripts/fetch_engine.sh
+./godot-to-aurora/scripts/fetch_engine.sh
 ```
 
-Подробности публикации — в [docs/RELEASES_GUIDE.md](docs/RELEASES_GUIDE.md).
+Проверка `SHA256SUMS` обязательна для любого источника (`--from-dir` тоже): без файла
+сумм или с несовпавшим хэшем скрипт завершается с ошибкой. Для локального каталога либо
+положи `SHA256SUMS` рядом с бинарниками, либо отключи проверку явно —
+`--skip-checksum`. Свои суммы можно сгенерировать через `--skip-checksum --write-sums`
+(подробности — в [docs/RELEASES_GUIDE.md](docs/RELEASES_GUIDE.md)).
 
-### 3. Позови агента
+### 4. Позови агента
 
 ```text
 Изучи godot-to-aurora/AGENTS.md и портируй мою игру на ОС Аврора.
 ```
 
 Агент создаст `PLAN.md`, внесёт правки, соберёт RPM и проверит игру в эмуляторе.
-Если хочешь пройти вручную — см. раздел «Сборка» ниже.
+Если хочешь пройти вручную — см. раздел «Сборка вручную» ниже.
 
 ---
 
@@ -70,7 +96,7 @@ AURORA_KIT_REPO=<owner>/godot-to-aurora ./godot-to-aurora/scripts/fetch_engine.s
 | Компонент | Зачем | Проверка |
 |---|---|---|
 | Linux (Fedora/Ubuntu), Docker | сборка RPM в образе `aurora-build-tools-*` | `docker --version` |
-| Аврора SDK 5.2+ | эмулятор QEMU, sysroot, `tools/run`, ключи подписи | `~/AuroraOS/bin/sfdk --version` |
+| Аврора SDK 5.2.x | эмулятор QEMU, sysroot, `tools/run`, ключи подписи | `~/AuroraOS/bin/sfdk --version` |
 | Aurora-редактор Godot | экспорт `.pck` и `aarch64` RPM | `fetch_engine.sh --check` |
 | `patchelf` | RPATH бинарника на приватную `libxkbcommon` (x86_64) | `patchelf --version` |
 | ImageMagick или `rsvg-convert` | иконки `86/108/128/172` из `icon.svg` | `magick -version` |
@@ -94,7 +120,11 @@ AURORA_KIT_REPO=<owner>/godot-to-aurora ./godot-to-aurora/scripts/fetch_engine.s
 godot-to-aurora/
 ├── AGENTS.md                     плейбук для ИИ-агента: аудит → PLAN.md → код → RPM → проверка
 ├── README.md
+├── CHANGELOG.md                  история изменений (Keep a Changelog)
+├── versions.env                  KIT_VERSION, теги движка и SDK, версии SCons/xkbcommon
 ├── .gitignore                    build/, *.rpm, движок, ключи — вне Git
+├── .gdignore                     Godot не сканирует кит, лежащий внутри проекта
+├── .editorconfig                 utf-8, LF, отступы для sh/gd/yml
 ├── scripts/
 │   ├── fetch_engine.sh           Aurora-редактор + шаблоны + export_templates
 │   ├── build_x86_64_rpm.sh       пресет, PCK, иконки, RPM (--arch x86_64|aarch64; RPATH — x86_64)
@@ -106,10 +136,15 @@ godot-to-aurora/
 │   ├── app.desktop.in            .desktop: Sailjail Permissions + Orientation
 │   └── app.spec.in               .spec без BuildRequires: patchelf/xkbcommon
 ├── modules/
-│   ├── aurora_lifecycle.gd       ориентация, пауза, мьют, автосохранение (autoload)
+│   ├── aurora_lifecycle.gd       ориентация, пауза, мьют, энергосбережение (autoload)
 │   ├── safe_area_helper.gd       safe area + ui_scale + 48dp touch-цели
 │   ├── save_service.gd           атомарный JSON в user:// (autoload)
-│   └── fonts/                    Liberation Mono/Sans/Bold + лицензии
+│   └── fonts/                    Liberation Mono/Sans/Bold + LICENSE (SIL OFL 1.1)
+├── tests/
+│   ├── test_cli.sh               CLI: --help/--version/--check, пресеты, экранирование
+│   ├── test_modules.gd           headless-тесты GDScript-модулей
+│   └── run_modules.sh            временная Godot-фикстура + headless-прогон
+├── .github/workflows/ci.yml      shellcheck + bash -n + CLI- и headless-тесты
 └── docs/
     ├── SDK_5_2_ARCHITECTURE.md   как устроен SDK 5.2 и что ломается
     └── RELEASES_GUIDE.md         публикация бинарников движка в GitHub Releases
@@ -155,19 +190,45 @@ sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec journalctl -f 
 ```
 build/<org>.<app>.pck
 build/rpmbuild/RPMS/x86_64/<org>.<app>-<version>-<release>.x86_64.rpm
+build/backups/export_presets.cfg.bak.<timestamp>     # если пресет создавался/менялся
 ```
+
+Ключи подписи копируются во временный `$BUILD_DIR/.signing.XXXXXX` и удаляются после
+подписи — в проекте и в Git их не остаётся.
 
 ### Полезные режимы
 
 ```bash
 ./scripts/build_x86_64_rpm.sh --help
+./scripts/build_x86_64_rpm.sh --version         # godot-to-aurora <KIT_VERSION>
 ./scripts/build_x86_64_rpm.sh --pck-only        # быстро проверить упаковку
 ./scripts/build_x86_64_rpm.sh --skip-template   # шаблон уже собран
 ./scripts/build_x86_64_rpm.sh --force-preset    # пересоздать AuroraOS-пресет
+./scripts/build_x86_64_rpm.sh --strict-sdk      # ошибка, если SDK не 5.2.x
+./scripts/build_x86_64_rpm.sh --skip-checksum   # отказ от SHA-256 xkbcommon/SCons
 ./scripts/fetch_engine.sh --check --print-paths
+./scripts/fetch_engine.sh --skip-checksum       # явный отказ от SHA256SUMS
 ./scripts/deploy_emulator.sh --check            # что скрипт видит
 ./scripts/deploy_emulator.sh --sign-only        # только подпись
 ```
+
+`--version` печатает одну строку `godot-to-aurora <KIT_VERSION>` и работает без
+`project.godot`, SDK, сети и Docker.
+
+### Что попадает в `.pck`
+
+В `exclude_filter` кит добавляет только `build/*` и каталог кита относительно проекта
+(например, `godot-to-aurora/*`). Каталоги вроде `tools/`, `addons/`, `docs/` **не**
+исключаются автоматически: они могут быть нужны игре. Вхождение проверяется точным
+токеном (`mybuild/*` не считается `build/*`).
+
+### Пресет `AuroraOS`
+
+Если `AURORA_PRESET` не задан и `--preset` не передан, кит берёт **первый существующий
+пресет с `platform="AuroraOS"`** (как бы он ни назывался, например `Aurora Phone`) и
+читает из него `package/organization` и `package/name`. Существующий пресет не
+перезаписывается: новый создаётся только когда пресетов `AuroraOS` нет, а
+`--force-preset` пересоздаёт его осознанно.
 
 ### Параметры пакета
 
@@ -180,15 +241,29 @@ build/rpmbuild/RPMS/x86_64/<org>.<app>-<version>-<release>.x86_64.rpm
 | `APP_TITLE` | нет | `Моя игра` |
 | `APP_VERSION` / `APP_RELEASE` | нет | `0.1.0` / `1` |
 | `PERMISSIONS` | нет | `Audio,Internet,Camera` |
-| `ORIENTATION` | нет | `Landscape`, `Portrait`, `Dynamic` |
-| `APP_COMMENT` | нет | `Системный симулятор` |
+| `ORIENTATION` | нет | `Landscape`, `Portrait`, `Dynamic` (или `0/2/4`, `1/3/5`, `6`) |
+| `APP_COMMENT` | нет | `Моя игра` (Comment в `.desktop`) |
 | `RPM_LICENSE` | нет | `Proprietary`, `MIT` |
-| `GODOT_BIN`, `AURORA_TEMPLATE` | нет | явные пути к движку |
+| `AURORA_PRESET` | нет | имя пресета; пусто = первый `platform="AuroraOS"` |
+| `BUILD_DIR` | нет | каталог сборки (по умолчанию `<проект>/build`) |
+| `GODOT_BIN` | нет | явный путь к Aurora-редактору |
+| `AURORA_TEMPLATE_X86_64` / `AURORA_TEMPLATE_AARCH64` | нет | явные пути к шаблонам (устаревшая `AURORA_TEMPLATE` работает для обеих арх.) |
 | `AURORA_KIT_ENGINE_DIR` | нет | куда `fetch_engine.sh` положил бинарники |
 | `AURORA_SDK_HOME` | нет | `~/AuroraOS` |
+| `AURORA_BUILD_IMAGE` | нет | образ `aurora-build-tools-*`, если имя нестандартное |
 
 Полное имя пакета = `<ORG_NAME>.<APP_NAME>`. Оно попадает в RPM, `.desktop`, `Exec`,
 иконки и путь песочницы `~/.local/share/<org>/<app>/`.
+
+Версии (кит, движок, SDK, SCons, xkbcommon) вынесены в [versions.env](versions.env) —
+правь их там, а не в скриптах.
+
+Кит рассчитан на Aurora SDK **5.2.x** (`SDK_SUPPORTED_PREFIX`). Если установлена
+другая серия (`5.1.x`, `5.3.x`, …), сборка и деплой печатают предупреждение и
+продолжают; `--strict-sdk` превращает это в ошибку. Версия `libxkbcommon`
+определяется из образа; известные версии перечислены в `XKBCOMMON_KNOWN_VERSIONS`.
+Для неизвестной версии сборка подскажет добавить её в `versions.env` или передать
+`build_x86_64_rpm.sh --skip-checksum` (явный отказ от проверки SHA-256).
 
 ---
 
@@ -198,35 +273,34 @@ build/rpmbuild/RPMS/x86_64/<org>.<app>-<version>-<release>.x86_64.rpm
 
 Чистый статический хелпер. Возвращает `{"l","t","r","b","valid"}`, игнорируя нулевую
 safe area и оконный режим на ПК, масштабирует отступы в координаты вьюпорта и считает
-`ui_scale` c ограничением `0.85…1.5`.
+`ui_scale` через `minf` с ограничением `0.85…1.5`. Минимальный размер касания — 48 dp с
+поправкой на DPI экрана.
 
 ```gdscript
 var vp := get_viewport().get_visible_rect().size
 var insets := AuroraSafeArea.insets(vp)
-var scale := AuroraSafeArea.ui_scale(vp)
-panel.offset_left = float(insets["l"]) + 24.0 * scale
-button.custom_minimum_size = Vector2.ONE * AuroraSafeArea.touch_target(scale)
+var ui_scale := AuroraSafeArea.ui_scale(vp)
+panel.offset_left = float(insets["l"]) + 24.0 * ui_scale
+button.custom_minimum_size = Vector2.ONE * AuroraSafeArea.touch_target(ui_scale)
 ```
 
 ### `modules/aurora_lifecycle.gd`
 
 Автозагрузка `AuroraLifecycle`: фиксирует ориентацию, по сворачиванию ставит дерево на
-паузу, мьютит `Master`, эмитит `autosave_requested`; игнорирует `FOCUS_OUT` до первого
-`FOCUS_IN`; не размораживает игру сама — это делает `resume_game()` из кнопки «Продолжить».
+паузу, включает энергосбережение (`OS.low_processor_usage_mode`, `Engine.max_fps`),
+мьютит `Master`, эмитит `autosave_requested`. Потеря фокуса окна на десктопе ставит игру
+на паузу только при `pause_on_desktop_focus_loss = true`; не размораживает игру сама —
+это делает `resume_game()` из кнопки «Продолжить».
 
 ### `modules/save_service.gd`
 
-Автозагрузка `SaveService`: атомарная запись JSON в `user://` (`tmp` + `rename`), версия
-формата, нормализация имён слотов, `save/load_slot/has_slot/erase_slot/list_slots/clear_all`.
+Автозагрузка `SaveService`: атомарная запись JSON в `user://` (`tmp` + `rename`, без
+предварительного удаления цели), восстановление из `.tmp` при повреждённом файле,
+версия формата и хук миграции (`expected_version` + `Callable`), транслитерация и
+хэш-суффикс имён слотов, `save/load_slot/has_slot/erase_slot/list_slots/clear_all`.
 Совместим с `--headless --script` тестами.
 
-Подключение:
-
-```ini
-[autoload]
-AuroraLifecycle="*res://scripts/aurora/aurora_lifecycle.gd"
-SaveService="*res://scripts/aurora/save_service.gd"
-```
+Подключение — см. «Быстрый старт», шаг 2.
 
 ---
 
@@ -243,6 +317,9 @@ x86_64, но с шаблоном `auroraos_release.arm64` и `rpmbuild --target 
 ./godot-to-aurora/scripts/deploy_emulator.sh \
   --rpm build/rpmbuild/RPMS/aarch64/<pkg>-*.aarch64.rpm --device "<имя>"
 ```
+
+Перед упаковкой скрипт проверяет ELF-архитектуру шаблона (`readelf -h`): шаблон
+`x86_64` не попадёт в `aarch64`-пакет и наоборот.
 
 `fetch_engine.sh` уже ставит arm64-шаблоны в `~/.local/share/godot/export_templates/`,
 поэтому они же доступны Aurora-редактору для отладки на устройстве. Пакет по умолчанию
@@ -261,7 +338,7 @@ docker run --rm -v "$PWD/build:/build:ro" --entrypoint /bin/bash \
 
 ## Частые проблемы
 
-Коротко; полная таблица — в [AGENTS.md](AGENTS.md#7-траблшутинг-проверенные-грабли) и
+Коротко; полная таблица — в [AGENTS.md](AGENTS.md#5-траблшутинг) и
 [docs/SDK_5_2_ARCHITECTURE.md](docs/SDK_5_2_ARCHITECTURE.md).
 
 * **`sfdk: Неизвестная команда 'engine'`** — в SDK 5.2 нет sb2; сборка идёт через
@@ -274,24 +351,42 @@ docker run --rm -v "$PWD/build:/build:ro" --entrypoint /bin/bash \
   в `.desktop`; запускать с иконки меню.
 * **HUD схлопнулся на ПК** — не считай отступы от «мониторной» safe area; используй
   `AuroraSafeArea`.
-* **Шрифты не те** — `fontconfig=no`; встраивай `.ttf` из `modules/fonts`.
+* **Шрифты не те** — `fontconfig=no`; встраивай `.ttf` в `res://assets/fonts/`.
+
+---
+
+## Тесты и CI
+
+```bash
+bash tests/test_cli.sh        # CLI без сети, Godot, Docker и SDK
+GODOT_BIN=/path/to/Godot bash tests/run_modules.sh   # headless-модули
+```
+
+`tests/test_cli.sh` проверяет `--help`/`--version`, `--check` без SDK, обязательность
+`SHA256SUMS` в `fetch_engine.sh --check`, сохранение существующего пресета `AuroraOS`,
+экранирование `%`/`"`/переводов строк, точное сравнение токенов `exclude_filter` и
+работу с кастомным `BUILD_DIR`.
+`tests/test_modules.gd` (через `tests/run_modules.sh`) — safe area, атомарная запись
+и восстановление сохранений, коллизии кириллических слотов, миграция версий и
+жизненный цикл.
 
 ---
 
 ## Документация
 
-* [AGENTS.md](AGENTS.md) — полный плейбук агента и таблица грабель.
+* [AGENTS.md](AGENTS.md) — плейбук агента: процесс, инварианты, чек-лист.
 * [docs/SDK_5_2_ARCHITECTURE.md](docs/SDK_5_2_ARCHITECTURE.md) — SDK 5.2, QEMU/KVM,
   `tools/run`, `rpmsign-external`, APM, Sailjail.
 * [docs/RELEASES_GUIDE.md](docs/RELEASES_GUIDE.md) — как опубликовать бинарники движка.
+* [CHANGELOG.md](CHANGELOG.md) — что изменилось между версиями кита.
 
 ---
 
 ## Лицензия
 
 Код кита, скрипты и шаблоны — MIT (см. [LICENSE](LICENSE)).
-Шрифты Liberation в `modules/fonts/` распространяются по SIL Open Font License 1.1
-(см. `LICENSE` и `LICENSE-LiberationSans` в том же каталоге).
+Шрифты Liberation в `modules/fonts/` распространяются по SIL Open Font License 1.1 —
+один файл `modules/fonts/LICENSE` на все три начертания.
 
 Aurora-сборка Godot (`savegame/godot`, тег `4.7.2-auroraos1`) — MIT; бинарники движка
 распространяются через Releases и не входят в Git-репозиторий.

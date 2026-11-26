@@ -1,28 +1,45 @@
 extends Node
-## Aurora OS application-lifecycle helper (autoload candidate).
+## Aurora OS application-lifecycle helper (autoload).
 ##
-## Register it in project.godot:
+## Canonical install path — copy `modules/aurora_lifecycle.gd` into the game at
+## `res://scripts/aurora/aurora_lifecycle.gd` and register the autoload:
 ##
 ##   [autoload]
-##   AuroraLifecycle="*res://godot-to-aurora/modules/aurora_lifecycle.gd"
+##   AuroraLifecycle="*res://scripts/aurora/aurora_lifecycle.gd"
 ##
 ##   # somewhere in your main scene:
 ##   func _ready() -> void:
 ##       AuroraLifecycle.suspended.connect(_on_suspended)
 ##       AuroraLifecycle.resumed.connect(_on_resumed)
+##       AuroraLifecycle.focus_changed.connect(_on_focus_changed)
 ##       AuroraLifecycle.autosave_requested.connect(_save_game)
 ##
-## What it does:
-##   * pins the screen orientation from `display/window/handheld/orientation`
-##     so the emulator (no accelerometer) and sensor-based settings agree;
-##   * pauses the scene tree and mutes the Master bus when the app is
-##     backgrounded (notification focus loss / APPLICATION_PAUSED);
-##   * ignores FOCUS_OUT that arrives before the first FOCUS_IN, otherwise a
-##     game started in the background (or under `--headless --script`) pauses
-##     itself immediately;
-##   * never unpauses automatically: the player resumes through the game's own
-##     "Continue" button, which should call `resume_game()`;
-##   * emits `autosave_requested` before the tree is frozen so saving is safe.
+## Signals:
+##   * `suspended(reason)` — the tree was paused and the app went to the
+##     background; the reason is "app_paused", "focus_out", "window_focus_out"
+##     or "manual";
+##   * `resumed(reason)` — the power-saving state and audio bus were restored
+##     (the tree stays paused until the game calls `resume_game()`);
+##   * `focus_changed(focused)` — window/application focus changed; emitted even
+##     when the change does not pause the game;
+##   * `autosave_requested(reason)` — emitted before the tree is frozen, so
+##     listeners can read the live game state synchronously.
+##
+## Behaviour:
+##   * `APPLICATION_PAUSED` / `APPLICATION_FOCUS_OUT` always suspend the game;
+##   * desktop `WM_WINDOW_FOCUS_OUT` suspends only when
+##     `pause_on_desktop_focus_loss` is `true` — clicking a second monitor or a
+##     system popup does not pause a desktop build by default;
+##   * a `WM_WINDOW_FOCUS_OUT` that arrives before the first `FOCUS_IN` is
+##     ignored, otherwise a game started in the background (or under
+##     `--headless --script`) pauses itself immediately;
+##   * on suspend the previous `OS.low_processor_usage_mode` and
+##     `Engine.max_fps` are saved, then set to `true` / `10`; on resume the
+##     previous values are restored;
+##   * the tree is never unpaused automatically: the player resumes through the
+##     game's own "Continue" button, which should call `resume_game()`;
+##   * `display/window/handheld/orientation` is pinned on startup so the
+##     emulator (no accelerometer) and sensor-based settings agree.
 ##
 ## The module is self-contained: no autoload lookups at parse time, so it also
 ## works in headless tests.
@@ -32,6 +49,9 @@ signal resumed(reason: String)
 signal focus_changed(focused: bool)
 signal autosave_requested(reason: String)
 
+## `Engine.max_fps` used while the application is in the background.
+const SUSPENDED_MAX_FPS := 10
+
 ## Pause the scene tree while the application is in the background.
 @export var pause_tree_on_suspend := true
 ## Mute the Master audio bus while the application is in the background.
@@ -40,6 +60,12 @@ signal autosave_requested(reason: String)
 @export var apply_orientation := true
 ## Emit `autosave_requested` on suspend and on close requests.
 @export var request_autosave := true
+## Pause on desktop window focus loss. Mobile builds pause on
+## `APPLICATION_PAUSED` anyway; on desktop this is usually unwanted.
+@export var pause_on_desktop_focus_loss := false
+## Throttle the process while suspended (`OS.low_processor_usage_mode` and
+## `Engine.max_fps`), restoring the previous values on resume.
+@export var power_save_on_suspend := true
 
 var is_suspended := false
 var has_focus := false
@@ -47,6 +73,9 @@ var has_focus := false
 var _seen_focus := false
 var _master_was_muted := false
 var _orientation := 0
+var _power_state_saved := false
+var _previous_low_processor := false
+var _previous_max_fps := 0
 
 
 func _ready() -> void:
@@ -59,46 +88,48 @@ func _ready() -> void:
 
 func _notification(what: int) -> void:
 	match what:
-		NOTIFICATION_APPLICATION_FOCUS_IN, NOTIFICATION_WM_WINDOW_FOCUS_IN:
-			_on_focus_in()
-		NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		NOTIFICATION_WM_WINDOW_FOCUS_IN:
+			_seen_focus = true
+			_handle_focus_in()
+		NOTIFICATION_WM_WINDOW_FOCUS_OUT:
 			# A window created in the background receives FOCUS_OUT before any
 			# FOCUS_IN; pausing there breaks headless runs and background starts.
 			if _seen_focus:
-				_on_focus_out()
+				_handle_focus_out(pause_on_desktop_focus_loss, "window_focus_out")
+		NOTIFICATION_APPLICATION_FOCUS_IN, NOTIFICATION_APPLICATION_RESUMED:
+			_seen_focus = true
+			_handle_focus_in()
+		NOTIFICATION_APPLICATION_FOCUS_OUT:
+			_handle_focus_out(true, "focus_out")
 		NOTIFICATION_APPLICATION_PAUSED:
 			suspend("app_paused")
-		NOTIFICATION_APPLICATION_RESUMED:
-			_on_focus_in()
 		NOTIFICATION_WM_CLOSE_REQUEST:
 			if request_autosave:
 				autosave_requested.emit("close_request")
 
 
-## Puts the game into the suspended state: mute, pause, autosave.
+## Puts the game into the suspended state: power saving, mute, pause, autosave.
 func suspend(reason: String = "manual") -> void:
 	if is_suspended:
 		return
 	is_suspended = true
+	_enter_power_saving()
 	if mute_audio_on_suspend:
 		_set_master_muted(true)
 	# Emit the autosave request before freezing the tree, so listeners can read
 	# the live game state synchronously.
 	if request_autosave:
 		autosave_requested.emit(reason)
-	if pause_tree_on_suspend:
-		var tree := get_tree()
-		if tree != null:
-			tree.paused = true
+	if pause_tree_on_suspend and is_inside_tree():
+		get_tree().paused = true
 	suspended.emit(reason)
 
 
 ## Leaves the suspended state and unpauses the tree. Call this from the game's
 ## "Continue" button after the player returns to the app.
 func resume_game() -> void:
-	var tree := get_tree()
-	if tree != null:
-		tree.paused = false
+	if is_inside_tree():
+		get_tree().paused = false
 	_resume("manual")
 
 
@@ -113,8 +144,7 @@ func apply_project_orientation() -> void:
 	_apply_orientation()
 
 
-func _on_focus_in() -> void:
-	_seen_focus = true
+func _handle_focus_in() -> void:
 	if not has_focus:
 		has_focus = true
 		focus_changed.emit(true)
@@ -122,20 +152,47 @@ func _on_focus_in() -> void:
 		_resume("focus_in")
 
 
-func _on_focus_out() -> void:
+## `pause` is false for desktop window focus loss unless
+## `pause_on_desktop_focus_loss` is enabled: the focus signal is still emitted.
+func _handle_focus_out(pause: bool, reason: String) -> void:
 	if has_focus:
 		has_focus = false
 		focus_changed.emit(false)
-	suspend("focus_out")
+	if pause:
+		suspend(reason)
 
 
 func _resume(reason: String) -> void:
 	if not is_suspended:
 		return
 	is_suspended = false
+	_leave_power_saving()
 	if mute_audio_on_suspend:
 		_set_master_muted(false)
 	resumed.emit(reason)
+
+
+## Saves the current power settings and throttles the process. The values are
+## captured even when `power_save_on_suspend` is off, so `_leave_power_saving()`
+## always has something consistent to restore.
+func _enter_power_saving() -> void:
+	if _power_state_saved:
+		return
+	_power_state_saved = true
+	_previous_low_processor = OS.low_processor_usage_mode
+	_previous_max_fps = Engine.max_fps
+	if not power_save_on_suspend:
+		return
+	OS.low_processor_usage_mode = true
+	Engine.max_fps = SUSPENDED_MAX_FPS
+
+
+func _leave_power_saving() -> void:
+	if not _power_state_saved:
+		return
+	_power_state_saved = false
+	OS.low_processor_usage_mode = _previous_low_processor
+	Engine.max_fps = _previous_max_fps
 
 
 func _apply_orientation() -> void:

@@ -1,0 +1,41 @@
+# Единые правила форматирования для репозитория godot-to-aurora.
+# https://editorconfig.org
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Bash: отступ — табы, как в существующих скриптах и в style guide Google.
+[*.sh]
+indent_style = tab
+
+# GDScript: отступ — табы (соглашение Godot).
+[*.gd]
+indent_style = tab
+
+# Конфиги Godot (.cfg/.ini) и переменные окружения — без табов.
+[*.{cfg,ini,tres,tscn,godot}]
+indent_size = 2
+
+# YAML (GitHub Actions) — 2 пробела.
+[*.{yml,yaml}]
+indent_size = 2
+
+# Markdown: висячие пробелы = перенос строки, поэтому не удаляем.
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefile требует табы.
+[Makefile]
+indent_style = tab
+
+# Бинарные ассеты не трогаем.
+[*.{png,ttf,otf,svg,qcow2,rpm,pck}]
+insert_final_newline = false
+trim_trailing_whitespace = false

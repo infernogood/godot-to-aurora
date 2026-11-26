@@ -1,7 +1,7 @@
-# RPM spec template for a Godot game packaged for Aurora OS (x86_64 emulator).
+# RPM spec template for a Godot game packaged for Aurora OS.
 #
-# Rendered by scripts/build_x86_64_rpm.sh. Placeholders:
-#   @PKG_NAME@ @SUMMARY@ @VERSION@ @RELEASE@ @LICENSE@ @GROUP@ @DESCRIPTION@
+# Rendered by scripts/build_x86_64_rpm.sh. Substituted keys:
+#   PKG_NAME, SUMMARY, VERSION, RELEASE, LICENSE, DESCRIPTION, CHANGELOG_DATE.
 #
 # The binary is patched with patchelf on the HOST before rpmbuild, so this spec
 # intentionally has no BuildRequires: patchelf and no install-time scripts that
@@ -10,13 +10,14 @@
 # distribution-specific dependencies are excluded because Aurora OS provides
 # libxkbcommon and the Wayland/EGL stack itself; a private copy is bundled
 # under the package data dir only as a compatibility fallback.
+#
+# NOTE: comments must not contain percent signs - rpm expands macros in them.
 
 Name:           @PKG_NAME@
 Summary:        @SUMMARY@
 Version:        @VERSION@
 Release:        @RELEASE@
 License:        @LICENSE@
-Group:          @GROUP@
 
 %define __requires_exclude ^libxkbcommon.*$
 %define __provides_exclude_from ^%{_datadir}/%{name}/lib/.*\.so.*$
@@ -33,7 +34,8 @@ cp -a %{_topdir}/files/. %{buildroot}/
 %attr(755,root,root) %{_bindir}/%{name}
 %{_datadir}/%{name}
 %{_datadir}/applications/%{name}.desktop
-%{_datadir}/icons/hicolor/86x86/apps/%{name}.png
-%{_datadir}/icons/hicolor/108x108/apps/%{name}.png
-%{_datadir}/icons/hicolor/128x128/apps/%{name}.png
-%{_datadir}/icons/hicolor/172x172/apps/%{name}.png
+%{_datadir}/icons/hicolor/*/apps/%{name}.png
+
+%changelog
+* @CHANGELOG_DATE@ godot-to-aurora <noreply@example.invalid> - @VERSION@-@RELEASE@
+- Package rebuilt with godot-to-aurora.
