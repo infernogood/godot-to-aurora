@@ -37,9 +37,12 @@
   (`.github/workflows/ci.yml`): `shellcheck`, `bash -n`, CLI-тесты, headless-прогон.
 - `%changelog` в `templates/app.spec.in` и ссылка на официальную документацию по
   профилям безопасности Sailjail в `docs/SDK_5_2_ARCHITECTURE.md`.
-- GitHub Release `engine-4.7.2-auroraos1` с редактором Godot, шаблонами x86_64/arm64
-  и `SHA256SUMS`; состав и происхождение — в
+- GitHub Release `engine-4.7.2-auroraos1` с редактором Godot, шаблонами x86_64/arm64,
+  `SHA256SUMS` и `LICENSE`; состав и происхождение — в
   [`docs/ENGINE_RELEASE_4.7.2-auroraos1.md`](docs/ENGINE_RELEASE_4.7.2-auroraos1.md).
+  В `LICENSE` добавлены уведомления об авторских правах Godot Engine
+  (`2014-present Godot Engine contributors`, `2007-2014 Juan Linietsky, Ariel Manzur`)
+  и полный текст MIT для бинарников.
 
 ### Changed
 

@@ -15,6 +15,7 @@ GitHub ограничивает размер одного файла в репо
 | `auroraos_release.arm64` | ~58 МБ | релизный шаблон для устройств | да (для aarch64 RPM) |
 | `auroraos_debug.arm64` | ~62 МБ | debug-шаблон для устройств | рекомендуется |
 | `SHA256SUMS` | < 1 КБ | контрольные суммы (проверка обязательна) | **да** |
+| `LICENSE` | < 10 КБ | MIT и уведомления об авторских правах Godot Engine | **да** |
 
 Имена файлов приходят из `versions.env`: `GODOT_AURORA_TAG` (`4.7.2-auroraos1`),
 `GODOT_TEMPLATE_VERSION` (`4.7.2.stable`) и `KIT_VERSION`. Меняешь движок — правь
@@ -92,6 +93,7 @@ gh release create "$TAG" \
   ~/release-assets/auroraos_release.arm64 \
   ~/release-assets/auroraos_debug.arm64 \
   ~/release-assets/SHA256SUMS \
+  ~/release-assets/LICENSE \
   --title "Godot 4.7.2 AuroraOS toolchain" \
   --notes-file docs/ENGINE_RELEASE_4.7.2-auroraos1.md
 ```
@@ -99,7 +101,7 @@ gh release create "$TAG" \
 Заметки релиза с составом, контрольными суммами и происхождением лежат в
 [`docs/ENGINE_RELEASE_4.7.2-auroraos1.md`](ENGINE_RELEASE_4.7.2-auroraos1.md).
 
-Без `gh` можно создать релиз в веб-интерфейсе GitHub и прикрепить те же пять файлов.
+Без `gh` можно создать релиз в веб-интерфейсе GitHub и прикрепить те же шесть файлов.
 
 Проверь, что assets доступны:
 

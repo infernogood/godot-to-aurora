@@ -469,4 +469,7 @@ GODOT_BIN=/path/to/Godot bash tests/run_modules.sh   # headless-модули
 один файл `modules/fonts/LICENSE` на все три начертания.
 
 Aurora-сборка Godot (`savegame/godot`, тег `4.7.2-auroraos1`) — MIT; бинарники движка
-распространяются через Releases и не входят в Git-репозиторий.
+распространяются через Releases и не входят в Git-репозиторий. Уведомления об авторских
+правах Godot Engine (`2014-present Godot Engine contributors`, `2007-2014 Juan Linietsky,
+Ariel Manzur`) и полный текст MIT включены в [LICENSE](LICENSE); тот же файл приложен
+к релизу движка.
