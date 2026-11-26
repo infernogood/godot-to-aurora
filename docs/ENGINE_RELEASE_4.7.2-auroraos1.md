@@ -14,7 +14,8 @@
 | `auroraos_release.arm64` | release-шаблон для устройства aarch64 |
 | `auroraos_debug.arm64` | debug-шаблон для отладки на устройстве aarch64 |
 | `SHA256SUMS` | контрольные суммы всех файлов |
-| `LICENSE` | MIT и уведомления об авторских правах кита и Godot Engine |
+| `LICENSE` | MIT кита |
+| `THIRD_PARTY_NOTICES.md` | MIT Godot Engine и уведомления об авторских правах |
 
 ## Контрольные суммы
 
@@ -71,9 +72,10 @@ Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md).
 Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.
 ```
 
-Полный текст MIT для кита и Godot Engine, а также уведомления об авторских правах
-находятся в [`LICENSE`](../LICENSE); этот файл приложен к релизу движка. Шрифты
-Liberation, которые кит копирует в игру, — SIL OFL 1.1 (`modules/fonts/LICENSE`).
+Полный текст MIT для кита — в [`LICENSE`](../LICENSE), для Godot Engine и уведомления
+об авторских правах — в [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md). Оба
+файла приложены к релизу движка. Шрифты Liberation, которые кит копирует в игру, —
+SIL OFL 1.1 (`modules/fonts/LICENSE`).
 
 Контрольные суммы фиксируют именно эти артефакты. Если файл не совпал с `SHA256SUMS`,
 не запускайте его: скачайте заново из этого релиза.

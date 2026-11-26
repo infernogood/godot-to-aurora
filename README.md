@@ -200,6 +200,8 @@ godot-to-aurora/
 ├── AGENTS.md                     плейбук для ИИ-агента: аудит → PLAN.md → код → RPM → проверка
 ├── README.md
 ├── CHANGELOG.md                  история изменений (Keep a Changelog)
+├── LICENSE                       MIT кита
+├── THIRD_PARTY_NOTICES.md        MIT Godot Engine и уведомления об авторских правах
 ├── versions.env                  KIT_VERSION, теги движка и SDK, версии SCons/xkbcommon
 ├── .gitignore                    build/, *.rpm, движок, ключи — вне Git
 ├── .editorconfig                 utf-8, LF, отступы для sh/gd/yml
@@ -225,7 +227,8 @@ godot-to-aurora/
 ├── .github/workflows/ci.yml      shellcheck + bash -n + CLI- и headless-тесты
 └── docs/
     ├── SDK_5_2_ARCHITECTURE.md   как устроен SDK 5.2 и что ломается
-    └── RELEASES_GUIDE.md         публикация бинарников движка в GitHub Releases
+    ├── RELEASES_GUIDE.md         публикация бинарников движка в GitHub Releases
+    └── ENGINE_RELEASE_4.7.2-auroraos1.md  состав и суммы релиза движка
 ```
 
 ### Что кит НЕ делает
@@ -471,5 +474,5 @@ GODOT_BIN=/path/to/Godot bash tests/run_modules.sh   # headless-модули
 Aurora-сборка Godot (`savegame/godot`, тег `4.7.2-auroraos1`) — MIT; бинарники движка
 распространяются через Releases и не входят в Git-репозиторий. Уведомления об авторских
 правах Godot Engine (`2014-present Godot Engine contributors`, `2007-2014 Juan Linietsky,
-Ariel Manzur`) и полный текст MIT включены в [LICENSE](LICENSE); тот же файл приложен
-к релизу движка.
+Ariel Manzur`) и полный текст MIT — в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md);
+оба файла приложены к релизу движка.

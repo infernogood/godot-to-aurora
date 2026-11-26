@@ -15,7 +15,8 @@ GitHub ограничивает размер одного файла в репо
 | `auroraos_release.arm64` | ~58 МБ | релизный шаблон для устройств | да (для aarch64 RPM) |
 | `auroraos_debug.arm64` | ~62 МБ | debug-шаблон для устройств | рекомендуется |
 | `SHA256SUMS` | < 1 КБ | контрольные суммы (проверка обязательна) | **да** |
-| `LICENSE` | < 10 КБ | MIT и уведомления об авторских правах Godot Engine | **да** |
+| `LICENSE` | < 10 КБ | MIT кита | **да** |
+| `THIRD_PARTY_NOTICES.md` | < 10 КБ | MIT Godot Engine и уведомления об авторских правах | **да** |
 
 Имена файлов приходят из `versions.env`: `GODOT_AURORA_TAG` (`4.7.2-auroraos1`),
 `GODOT_TEMPLATE_VERSION` (`4.7.2.stable`) и `KIT_VERSION`. Меняешь движок — правь
@@ -94,6 +95,7 @@ gh release create "$TAG" \
   ~/release-assets/auroraos_debug.arm64 \
   ~/release-assets/SHA256SUMS \
   ~/release-assets/LICENSE \
+  ~/release-assets/THIRD_PARTY_NOTICES.md \
   --title "Godot 4.7.2 AuroraOS toolchain" \
   --notes-file docs/ENGINE_RELEASE_4.7.2-auroraos1.md
 ```
@@ -101,7 +103,7 @@ gh release create "$TAG" \
 Заметки релиза с составом, контрольными суммами и происхождением лежат в
 [`docs/ENGINE_RELEASE_4.7.2-auroraos1.md`](ENGINE_RELEASE_4.7.2-auroraos1.md).
 
-Без `gh` можно создать релиз в веб-интерфейсе GitHub и прикрепить те же шесть файлов.
+Без `gh` можно создать релиз в веб-интерфейсе GitHub и прикрепить те же семь файлов.
 
 Проверь, что assets доступны:
 
@@ -188,8 +190,10 @@ rm -rf "$TMPH"
 ## 8. Лицензии и распространение
 
 * Godot и форк `savegame/godot` — MIT. Распространение собранных бинарников допустимо;
-  сохраняй уведомление об авторских правах и текст лицензии движка (например, в
-  `docs/THIRD_PARTY.md` при желании).
+  сохраняй уведомление об авторских правах и текст лицензии движка в
+  `THIRD_PARTY_NOTICES.md` и прикладывай этот файл к релизу вместе с `LICENSE`.
+  В уведомлении указаны `Copyright (c) 2014-present Godot Engine contributors` и
+  `Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur`.
 * Шрифты Liberation в ките — SIL OFL 1.1; один файл `modules/fonts/LICENSE`.
 * Игра пользователя и её ассеты в кит не входят и не публикуются.
 
