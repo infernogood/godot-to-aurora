@@ -1,35 +1,50 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 #
-# godot-to-aurora — shared helpers.
+# godot-to-aurora — общие функции для shell-скриптов кита.
 #
-# This file is sourced by fetch_engine.sh, build_x86_64_rpm.sh and
-# deploy_emulator.sh. It never runs on its own.
+# Файл подключается через `source` из fetch_engine.sh, build_x86_64_rpm.sh
+# и deploy_emulator.sh. Сам по себе не запускается и требует bash 5+.
 #
-# Naming: all globals set here are prefixed with KIT_ or PKG_ so a caller can
-# see at a glance where a value came from.
+# Имена: все глобальные переменные имеют префикс KIT_ / PKG_ / AURORA_, чтобы
+# в вызывающем скрипте было видно происхождение значения.
 
 # ---------------------------------------------------------------------------
-# Guard + paths
+# Защита от повторного подключения + версии
 # ---------------------------------------------------------------------------
 if [[ -n "${AURORA_KIT_COMMON_SOURCED:-}" ]]; then
 	return 0
 fi
 AURORA_KIT_COMMON_SOURCED=1
 
-# Bash 5.2+ expands '&' in ${var//pat/repl}; templates contain no '&' patterns
-# but user-provided titles might, so keep substitution literal.
+# Bash 5.2+ раскрывает '&' в ${var//pat/repl}; шаблоны кита не содержат '&',
+# но заголовок игры может, поэтому подстановку оставляем буквальной.
 shopt -u patsub_replacement 2>/dev/null || true
 
 KIT_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 KIT_ROOT="$(cd -- "$KIT_LIB_DIR/../.." && pwd)"
 KIT_TEMPLATES="$KIT_ROOT/templates"
-KIT_MODULES="$KIT_ROOT/modules"
+KIT_VERSIONS_FILE="$KIT_ROOT/versions.env"
 
-KIT_VERSION="1.0.0"
+# Единый источник версий; при отсутствии файла работают значения по умолчанию.
+if [[ -f "$KIT_VERSIONS_FILE" ]]; then
+	# shellcheck disable=SC1090
+	source "$KIT_VERSIONS_FILE"
+fi
+
+KIT_VERSION="${KIT_VERSION:-1.1.0}"
+GODOT_AURORA_TAG="${GODOT_AURORA_TAG:-4.7.2-auroraos1}"
+GODOT_TEMPLATE_VERSION="${GODOT_TEMPLATE_VERSION:-4.7.2.stable}"
+SDK_DEFAULT_VERSION="${SDK_DEFAULT_VERSION:-5.2.1.200}"
+SDK_SUPPORTED_PREFIX="${SDK_SUPPORTED_PREFIX:-5.2.}"
+SCONS_VERSION="${SCONS_VERSION:-4.11.1}"
+SCONS_SHA256="${SCONS_SHA256:-454cef364348053422696e3d2ecb4fa593c96a624f955842eaaea64f95c8d11d}"
+XKBCOMMON_VERSION="${XKBCOMMON_VERSION:-1.3.1}"
+XKBCOMMON_SHA256="${XKBCOMMON_SHA256:-8eda6782c6ed4b83296521f2f7e6bea88aba76d49c39fb4fce0f8d355a9181ce}"
+XKBCOMMON_KNOWN_VERSIONS="${XKBCOMMON_KNOWN_VERSIONS:-1.3.1 1.3.1+git1}"
 
 # ---------------------------------------------------------------------------
-# Logging
+# Логирование
 # ---------------------------------------------------------------------------
 if [[ -t 1 ]]; then
 	KIT_C_RESET=$'\033[0m'
@@ -56,21 +71,41 @@ kit_die()  { kit_err "$*"; exit 1; }
 
 kit_has() { command -v -- "$1" >/dev/null 2>&1; }
 
+# kit_has_any cmd... — успех, если найдена хотя бы одна команда.
+kit_has_any() {
+	local cmd
+	for cmd in "$@"; do
+		kit_has "$cmd" && return 0
+	done
+	return 1
+}
+
 kit_require() {
 	local missing=() cmd
 	for cmd in "$@"; do
 		kit_has "$cmd" || missing+=("$cmd")
 	done
 	if (( ${#missing[@]} > 0 )); then
-		kit_die "missing required command(s): ${missing[*]}. Install them first."
+		kit_die "не найдены обязательные команды: ${missing[*]}. Установите их и повторите."
+	fi
+}
+
+# kit_yes_no <command> [args...] — печатает yes/no, не глуша код возврата.
+kit_yes_no() {
+	local rc=0
+	"$@" >/dev/null 2>&1 || rc=$?
+	if (( rc == 0 )); then
+		printf 'yes'
+	else
+		printf 'no'
 	fi
 }
 
 # ---------------------------------------------------------------------------
-# Small filesystem helpers
+# Файловая система
 # ---------------------------------------------------------------------------
 kit_abspath() {
-	# Resolve a possibly non-existent path without touching it.
+	# Нормализует путь, не создавая его.
 	local path="$1" dir
 	if [[ -d "$path" ]]; then
 		(cd -- "$path" && pwd)
@@ -84,41 +119,92 @@ kit_abspath() {
 	fi
 }
 
+kit_trim() {
+	local value="$1"
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	printf '%s\n' "$value"
+}
+
+# kit_path_inside PATH ROOT — точная проверка вложенности после realpath -m:
+# /home/u/game-old не является подкаталогом /home/u/game.
+kit_path_inside() {
+	local target root
+	target="$(realpath -m -- "$1")"
+	root="$(realpath -m -- "$2")"
+	[[ "$target" == "$root" || "$target" == "$root/"* ]]
+}
+
+# kit_backup_file FILE — резервная копия под ${BUILD_DIR:-$PROJECT_ROOT/build}/backups/.
 kit_backup_file() {
-	# Conservative backup used before touching files that belong to the game.
-	local file="$1"
+	local file="$1" base dir stamp backup
 	[[ -f "$file" ]] || return 0
-	local backup="$file.bak.$(date +%Y%m%d-%H%M%S)"
+	if [[ -n "${BUILD_DIR:-}" ]]; then
+		base="$BUILD_DIR"
+	elif [[ -n "${PROJECT_ROOT:-}" ]]; then
+		base="$PROJECT_ROOT/build"
+	else
+		base="$(dirname -- "$file")/build"
+	fi
+	dir="$base/backups"
+	mkdir -p -- "$dir"
+	stamp="$(date +%Y%m%d-%H%M%S)"
+	backup="$dir/$(basename -- "$file").bak.$stamp"
 	cp -p -- "$file" "$backup"
-	kit_info "backup: $backup"
+	kit_info "резервная копия: $backup"
+}
+
+# kit_ensure_project_gitignore — идемпотентно дописывает артефакты кита
+# в .gitignore целевого проекта (точными строками, без дубликатов).
+kit_ensure_project_gitignore() {
+	local root="${PROJECT_ROOT:-}"
+	[[ -n "$root" ]] || return 0
+	local file="$root/.gitignore"
+	local entry added=0
+	local -a entries=("build/" "*.rpm" "export_presets.cfg.bak.*")
+	[[ -f "$file" ]] || : > "$file"
+	# Дописываемая строка не должна склеиться с последней строкой файла.
+	if [[ -s "$file" ]] && [[ -n "$(tail -c 1 -- "$file")" ]]; then
+		printf '\n' >> "$file"
+	fi
+	for entry in "${entries[@]}"; do
+		if ! grep -qxF -- "$entry" "$file"; then
+			printf '%s\n' "$entry" >> "$file"
+			added=1
+		fi
+	done
+	if (( added )); then
+		kit_info "в .gitignore проекта добавлены артефакты сборки: $file"
+	fi
+	return 0
 }
 
 kit_download() {
 	# kit_download <url> <dest>
 	local url="$1" dest="$2"
-	kit_has curl || kit_die "curl is required to download $url"
+	kit_has curl || kit_die "для загрузки $url требуется curl"
 	mkdir -p -- "$(dirname -- "$dest")"
-	kit_log "downloading $(basename -- "$dest")…"
+	kit_log "загрузка $(basename -- "$dest")…"
 	curl --fail --location --retry 3 --retry-delay 2 \
 		--connect-timeout 30 --progress-bar \
 		--output "$dest.part" "$url" || {
 		rm -f -- "$dest.part"
-		kit_die "download failed: $url"
+		kit_die "не удалось загрузить: $url"
 	}
 	mv -- "$dest.part" "$dest"
 }
 
 # ---------------------------------------------------------------------------
-# Game project discovery
+# Поиск проекта игры
 # ---------------------------------------------------------------------------
-# The kit is meant to be copied into the root of a Godot project as
-# "godot-to-aurora/". It also works when its contents are copied directly
-# into the project root. GAME_DIR overrides both cases.
+# Кит кладётся в корень Godot-проекта как "godot-to-aurora/". Работает и
+# вариант, когда содержимое кита скопировано прямо в корень. GAME_DIR
+# переопределяет оба случая.
 kit_project_root() {
 	local dir
 	if [[ -n "${GAME_DIR:-}" ]]; then
 		dir="$(kit_abspath "$GAME_DIR")"
-		[[ -f "$dir/project.godot" ]] || kit_die "GAME_DIR does not contain project.godot: $dir"
+		[[ -f "$dir/project.godot" ]] || kit_die "GAME_DIR не содержит project.godot: $dir"
 		printf '%s\n' "$dir"
 		return 0
 	fi
@@ -131,13 +217,12 @@ kit_project_root() {
 		printf '%s\n' "$dir"
 		return 0
 	fi
-	kit_die "project.godot not found. Put godot-to-aurora/ into the root of your Godot project, or set GAME_DIR=/path/to/game."
+	kit_die "project.godot не найден. Положите godot-to-aurora/ в корень Godot-проекта или задайте GAME_DIR=/путь/к/игре."
 }
 
 # kit_read_project_setting <section/key> [default]
-# Example: kit_read_project_setting application/config/name "My Game"
 kit_read_project_setting() {
-	local full="$1" fallback="${2:-}" file="$PROJECT_ROOT/project.godot"
+	local full="$1" fallback="${2:-}" file="${PROJECT_ROOT:-}/project.godot"
 	local value
 	[[ -f "$file" ]] || { printf '%s\n' "$fallback"; return 0; }
 	value="$(awk -v full="$full" '
@@ -170,7 +255,7 @@ kit_read_project_setting() {
 }
 
 # ---------------------------------------------------------------------------
-# export_presets.cfg access
+# export_presets.cfg
 # ---------------------------------------------------------------------------
 KIT_PRESET_FILE=""
 
@@ -178,39 +263,42 @@ kit_preset_file() {
 	if [[ -n "${PRESET_FILE:-}" ]]; then
 		printf '%s\n' "$(kit_abspath "$PRESET_FILE")"
 	else
-		printf '%s\n' "$PROJECT_ROOT/export_presets.cfg"
+		printf '%s\n' "${PROJECT_ROOT:-}/export_presets.cfg"
 	fi
 }
 
-# Index of the first preset with platform="AuroraOS" (or the one named by
-# AURORA_PRESET). Prints nothing when the file has no such preset.
+# Индекс пресета: при пустом AURORA_PRESET — первый с platform="AuroraOS"
+# (имя не важно, например "Aurora Phone"); иначе — пресет с этим именем.
+# Печатает пустую строку, если подходящего пресета нет.
 kit_aurora_preset_index() {
-	local file="$1" want="${AURORA_PRESET:-}"
+	local file="$1" want="${AURORA_PRESET:-}" idx
 	[[ -f "$file" ]] || return 0
-	awk -v want="$want" '
-		BEGIN { idx = ""; name = ""; in_base = 0 }
+	local -a candidates=()
+	mapfile -t candidates < <(awk '
 		/^\[preset\.[0-9]+\]$/ {
 			idx = $0
 			sub(/^\[preset\./, "", idx)
 			sub(/\]$/, "", idx)
-			name = ""
-			in_base = 1
 			next
 		}
-		/^\[/ { in_base = 0; next }
-		in_base && /^name="/ {
-			name = $0
-			sub(/^name="/, "", name)
-			sub(/"$/, "", name)
-			next
-		}
-		in_base && /^platform="AuroraOS"$/ {
-			if (want == "" || name == want) { print idx; exit }
-		}
-	' "$file"
+		/^\[/ { idx = ""; next }
+		idx != "" && /^platform="AuroraOS"$/ { print idx; next }
+	' "$file")
+	(( ${#candidates[@]} > 0 )) || return 0
+	if [[ -z "$want" ]]; then
+		printf '%s\n' "${candidates[0]}"
+		return 0
+	fi
+	for idx in "${candidates[@]}"; do
+		if [[ "$(kit_preset_value "$file" "$idx" "name" "")" == "$want" ]]; then
+			printf '%s\n' "$idx"
+			return 0
+		fi
+	done
+	return 0
 }
 
-# Read a key from a specific preset (base preset.N section or its .options).
+# Читает ключ из конкретного пресета (секция preset.N или preset.N.options).
 kit_preset_value() {
 	local file="$1" idx="$2" key="$3" fallback="${4:-}" value
 	[[ -f "$file" && -n "$idx" ]] || { printf '%s\n' "$fallback"; return 0; }
@@ -227,7 +315,26 @@ kit_preset_value() {
 			gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
 			if (k != key) next
 			val = substr($0, pos + 1)
-			gsub(/^"|"$/, "", val)
+			sub(/^[[:space:]]+/, "", val)
+			sub(/[[:space:]]+$/, "", val)
+			# Кавычки Godot экранирует: \" и \\. Раскодируем одним проходом,
+			# иначе обратные слэши утекут в .desktop и .spec.
+			if (val ~ /^".*"$/ && length(val) >= 2) {
+				body = substr(val, 2, length(val) - 2)
+				out = ""
+				i = 1
+				while (i <= length(body)) {
+					c = substr(body, i, 1)
+					if (c == "\\" && i < length(body)) {
+						i++
+						out = out substr(body, i, 1)
+					} else {
+						out = out c
+					}
+					i++
+				}
+				val = out
+			}
 			print val
 			exit
 		}
@@ -241,14 +348,13 @@ kit_aurora_preset_name() {
 }
 
 kit_next_preset_index() {
-	local file="$1"
+	local file="$1" max=""
 	[[ -f "$file" ]] || { printf '0\n'; return 0; }
-	local max
 	max="$(sed -n 's/^\[preset\.\([0-9]\+\)\].*/\1/p' "$file" | sort -n | tail -1)"
 	printf '%s\n' "$(( ${max:--1} + 1 ))"
 }
 
-# Removes [preset.N] and [preset.N.options] (and their body) from a preset file.
+# Удаляет [preset.N] и [preset.N.options] вместе с телом.
 kit_remove_preset() {
 	local file="$1" idx="$2"
 	[[ -f "$file" && -n "$idx" ]] || return 0
@@ -266,7 +372,38 @@ kit_remove_preset() {
 }
 
 # ---------------------------------------------------------------------------
-# Parameter resolution
+# Экранирование значений шаблонов
+# ---------------------------------------------------------------------------
+# kit_strip_control_chars — удаляет управляющие символы (CR/LF/TAB и прочие).
+kit_strip_control_chars() {
+	local value="$1"
+	printf '%s' "$value" | LC_ALL=C tr -d '\001-\037\177'
+}
+
+# kit_escape_spec VALUE — для .spec: нет управляющих символов, '%' -> '%%'.
+kit_escape_spec() {
+	local value
+	value="$(kit_strip_control_chars "$1")"
+	value="${value//%/%%}"
+	printf '%s\n' "$value"
+}
+
+# kit_escape_desktop VALUE — для .desktop: только удаление управляющих символов.
+kit_escape_desktop() {
+	printf '%s\n' "$(kit_strip_control_chars "$1")"
+}
+
+# kit_escape_cfg VALUE — для export_presets.cfg: экранируются '\' и '"'.
+kit_escape_cfg() {
+	local value
+	value="$(kit_strip_control_chars "$1")"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	printf '%s\n' "$value"
+}
+
+# ---------------------------------------------------------------------------
+# Параметры пакета
 # ---------------------------------------------------------------------------
 AURORA_PERMISSION_KEYS=(
 	Audio Bluetooth Camera DeviceInfo Documents Downloads Internet Location
@@ -275,8 +412,7 @@ AURORA_PERMISSION_KEYS=(
 )
 
 kit_translit() {
-	# Minimal ru/uk -> latin transliteration so a Cyrillic project name can
-	# still produce a valid package identifier. Not a general solution.
+	# Минимальная транслитерация ru/uk -> latin: имя пакета должно быть ASCII.
 	local input="$1" out="" ch lower
 	local -A map=(
 		[а]=a [б]=b [в]=v [г]=g [д]=d [е]=e [ё]=e [ж]=zh [з]=z [и]=i
@@ -298,7 +434,7 @@ kit_translit() {
 }
 
 kit_slug() {
-	# ASCII slug: lowercase, [a-z0-9_] only, collapsed separators.
+	# ASCII slug: только [a-z0-9_], повторы разделителей схлопываются.
 	local raw
 	raw="$(kit_translit "$1" | tr '[:upper:]' '[:lower:]')"
 	raw="$(printf '%s' "$raw" | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//; s/_+/_/g')"
@@ -314,22 +450,24 @@ kit_validate_app() {
 }
 
 kit_normalize_orientation() {
-	# Accepts Aurora values (Landscape/Portrait/Dynamic) and the Godot
-	# screen orientation enum used by display/window/handheld/orientation.
+	# Единая карта для кода и документации:
+	#   0 2 4 landscape reverse_landscape sensor_landscape       -> Landscape
+	#   1 3 5 portrait  reverse_portrait   sensor_portrait       -> Portrait
+	#   6     dynamic   sensor                                    -> Dynamic
 	local raw="${1,,}" mapped=""
 	case "$raw" in
-		landscape|0|2|4|sensor_landscape|sensorlandscape) mapped="Landscape" ;;
-		portrait|1|3|5|sensor_portrait|sensorportrait) mapped="Portrait" ;;
-		dynamic|sensor|6|reverse_landscape|reverse_portrait) mapped="Dynamic" ;;
+		landscape|0|2|4|reverse_landscape|sensor_landscape|sensorlandscape) mapped="Landscape" ;;
+		portrait|1|3|5|reverse_portrait|sensor_portrait|sensorportrait) mapped="Portrait" ;;
+		dynamic|sensor|6) mapped="Dynamic" ;;
 		*) return 1 ;;
 	esac
 	printf '%s\n' "$mapped"
 }
 
 kit_parse_permissions() {
-	# Accepts "Audio,Internet" / "Audio Internet" and prints a canonical,
-	# de-duplicated comma-separated list. Unknown names are rejected so a typo
-	# cannot silently grant nothing.
+	# Принимает "Audio,Internet" / "Audio Internet" и печатает канонический
+	# список без дубликатов. Неизвестное имя — ошибка, чтобы опечатка не
+	# приводила к молчаливому отсутствию прав.
 	local raw="${1//,/ }" item canonical out=()
 	local -A seen=()
 	for item in $raw; do
@@ -339,7 +477,7 @@ kit_parse_permissions() {
 			if [[ "${item,,}" == "${key,,}" ]]; then canonical="$key"; break; fi
 		done
 		if [[ -z "$canonical" ]]; then
-			kit_die "unknown permission '$item'. Valid values: ${AURORA_PERMISSION_KEYS[*]}"
+			kit_die "неизвестное разрешение '$item'. Допустимые значения: ${AURORA_PERMISSION_KEYS[*]}"
 		fi
 		[[ -n "${seen[$canonical]:-}" ]] && continue
 		seen[$canonical]=1
@@ -360,7 +498,7 @@ kit_permissions_from_preset() {
 	printf '%s\n' "${out[*]}"
 }
 
-# kit_load_package_params — sets PKG_* globals used by every script.
+# kit_load_package_params — заполняет PKG_* и PROJECT_ROOT из проекта/пресета.
 kit_load_package_params() {
 	PROJECT_ROOT="$(kit_project_root)"
 	KIT_PRESET_FILE="$(kit_preset_file)"
@@ -370,7 +508,7 @@ kit_load_package_params() {
 		PKG_PRESET_NAME="$(kit_aurora_preset_name "$KIT_PRESET_FILE" "$PKG_PRESET_INDEX")"
 	fi
 
-	local project_name project_version launcher_name preset_exclude
+	local project_name project_version preset_exclude
 	project_name="$(kit_read_project_setting application/config/name "")"
 	project_version="$(kit_read_project_setting application/config/version "0.1.0")"
 
@@ -388,7 +526,7 @@ kit_load_package_params() {
 	fi
 	if [[ -z "$PKG_ORG" ]]; then
 		PKG_ORG="ru.${PKG_APP}"
-		kit_warn "package organization is not configured; defaulting to '$PKG_ORG' (set ORG_NAME to override)."
+		kit_warn "package/organization не задан; используется '$PKG_ORG' (переопределяется ORG_NAME)."
 	fi
 
 	PKG_TITLE="${APP_TITLE:-}"
@@ -411,20 +549,20 @@ kit_load_package_params() {
 		PKG_RELEASE="$(kit_preset_value "$KIT_PRESET_FILE" "${PKG_PRESET_INDEX:-}" "package/release" "")"
 	fi
 	PKG_RELEASE="${PKG_RELEASE:-1}"
-	[[ "$PKG_RELEASE" =~ ^[0-9]+$ ]] || kit_die "invalid release '$PKG_RELEASE' (expected a positive integer)."
+	[[ "$PKG_RELEASE" =~ ^[0-9]+$ ]] || kit_die "некорректный release '$PKG_RELEASE' (ожидается целое число)."
 
 	PKG_FULL="$PKG_ORG.$PKG_APP"
 	if ! kit_validate_org "$PKG_ORG"; then
-		kit_die "invalid organization '$PKG_ORG' (expected dotted lowercase, e.g. ru.example). Set ORG_NAME."
+		kit_die "некорректная организация '$PKG_ORG' (нужен точечный lowercase, например ru.example). Задайте ORG_NAME."
 	fi
 	if ! kit_validate_app "$PKG_APP"; then
-		kit_die "invalid application name '$PKG_APP' (expected lowercase [a-z0-9_]). Set APP_NAME."
+		kit_die "некорректное имя приложения '$PKG_APP' (нужен lowercase [a-z0-9_]). Задайте APP_NAME."
 	fi
 
 	local orientation_raw
 	orientation_raw="${ORIENTATION:-$(kit_read_project_setting display/window/handheld/orientation "0")}"
 	PKG_ORIENTATION="$(kit_normalize_orientation "$orientation_raw")" \
-		|| kit_die "unsupported orientation '$orientation_raw' (use Landscape, Portrait or Dynamic)."
+		|| kit_die "неподдерживаемая ориентация '$orientation_raw' (Landscape, Portrait или Dynamic)."
 
 	PKG_PERMISSIONS=""
 	if [[ -n "${PERMISSIONS:-}" ]]; then
@@ -434,12 +572,13 @@ kit_load_package_params() {
 	fi
 	if [[ -z "$PKG_PERMISSIONS" ]]; then
 		PKG_PERMISSIONS="Audio"
-		kit_info "no Sailjail permissions configured; defaulting to Audio (set PERMISSIONS to override)."
+		kit_info "разрешения Sailjail не заданы; по умолчанию Audio (переопределяется PERMISSIONS)."
 	fi
 
+	# shellcheck disable=SC2034 # читается скриптами сборки
 	PKG_COMMENT="${APP_COMMENT:-$(kit_read_project_setting application/config/description "")}"
 	PKG_LICENSE="${RPM_LICENSE:-Proprietary}"
-	PKG_GROUP="${RPM_GROUP:-Amusements/Games}"
+	# shellcheck disable=SC2034 # читается скриптами сборки
 	PKG_CATEGORIES="${APP_CATEGORIES:-Game}"
 
 	preset_exclude=""
@@ -452,7 +591,7 @@ kit_load_package_params() {
 kit_print_params() {
 	cat <<EOF
   project           $PROJECT_ROOT
-  preset            ${PKG_PRESET_NAME:-<will be created>} (index ${PKG_PRESET_INDEX:-none})
+  preset            ${PKG_PRESET_NAME:-<будет создан>} (индекс ${PKG_PRESET_INDEX:-нет})
   package           $PKG_FULL
   title             $PKG_TITLE
   version           $PKG_VERSION-$PKG_RELEASE
@@ -464,13 +603,15 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Templates and preset generation
+# Шаблоны и генерация пресета
 # ---------------------------------------------------------------------------
 # kit_render_template <src> <dst> [KEY=VALUE ...]
-# Replaces every occurrence of @KEY@ with VALUE. Values are inserted literally.
+# Заменяет все вхождения @KEY@ на VALUE буквально (значения экранируются
+# вызывающей стороной через kit_escape_*).
 kit_render_template() {
-	local src="$1" dst="$2"; shift 2
-	[[ -f "$src" ]] || kit_die "template not found: $src"
+	local src="$1" dst="$2"
+	shift 2
+	[[ -f "$src" ]] || kit_die "шаблон не найден: $src"
 	local content pair key value
 	content="$(cat -- "$src")"
 	for pair in "$@"; do
@@ -494,84 +635,73 @@ kit_permissions_block() {
 }
 
 # kit_write_aurora_preset [--force]
-# Creates an AuroraOS preset from templates/export_presets.aurora.cfg.
-# Existing presets are never overwritten unless --force is given; a new preset
-# always gets the next free index and is appended to export_presets.cfg.
+# Создаёт пресет AuroraOS из templates/export_presets.aurora.cfg. Существующий
+# пресет НЕ перезаписывается без --force; новый индекс — только если пресета
+# с platform="AuroraOS" в файле нет.
 kit_write_aurora_preset() {
 	local force=0
 	[[ "${1:-}" == "--force" ]] && force=1
 	local file="$KIT_PRESET_FILE"
-	local idx name
+	[[ -n "$file" ]] || file="$(kit_preset_file)"
+	local idx name tmp exclude_raw exclude perms_block escape_name escape_org escape_app
+	local escape_title escape_version escape_release
 
 	idx="$(kit_aurora_preset_index "$file")"
-	name="${AURORA_PRESET:-AuroraOS}"
 	if [[ -n "$idx" && "$force" != "1" ]]; then
-		kit_info "AuroraOS preset already exists (index $idx); leaving it untouched."
+		kit_info "пресет AuroraOS уже существует (индекс $idx); файл не изменяется."
+		PKG_PRESET_INDEX="$idx"
+		PKG_PRESET_NAME="$(kit_aurora_preset_name "$file" "$idx")"
 		return 0
 	fi
 	if [[ -z "$idx" ]]; then
 		idx="$(kit_next_preset_index "$file")"
 	fi
 
-	local exclude
-	exclude="$(kit_merge_exclude_filter "${PKG_EXCLUDE_FILTER:-}")"
-	local perms_block
-	perms_block="$(kit_permissions_block)"
-
-	local tmp
-	tmp="$(mktemp)"
-	mkdir -p -- "$(dirname -- "$file")"
-	kit_render_template \
-		"$KIT_TEMPLATES/export_presets.aurora.cfg" "$tmp" \
-		"PRESET_NAME=$name" \
-		"ORG=$PKG_ORG" \
-		"APP=$PKG_APP" \
-		"TITLE=$PKG_TITLE" \
-		"VERSION=$PKG_VERSION" \
-		"RELEASE=$PKG_RELEASE" \
-		"EXCLUDE=$exclude"
-
-	# Replace the @PERMISSIONS_BLOCK@ line with the generated multiline block.
-	local body
-	body="$(awk -v block="$perms_block" '
-		/^@PERMISSIONS_BLOCK@$/ { print block; next }
-		{ print }
-	' "$tmp")"
-	printf '%s\n' "$body" > "$tmp"
-
-	kit_backup_file "$file"
-	if [[ ! -f "$file" ]]; then
-		{
-			echo '[runnable_presets]'
-			echo
-			echo "${name}=\"${name}\""
-			echo
-		} > "$file"
-	else
-		if (( force )); then
-			kit_remove_preset "$file" "$idx"
-		fi
-		if ! grep -q '^\[runnable_presets\]$' "$file"; then
-			# Keep the file valid for the editor by giving it the section Godot
-			# normally writes itself.
-			{
-				echo '[runnable_presets]'
-				echo
-				echo "${name}=\"${name}\""
-				echo
-				cat "$file"
-			} > "$file.tmp" && mv "$file.tmp" "$file"
-		elif ! grep -qx "${name}=\"${name}\"" "$file"; then
-			awk -v line="${name}=\"${name}\"" '
-				/^\[runnable_presets\]$/ { print; print line; inrun=1; next }
-				{ if (inrun && $0 == "") inrun=0; print }
-			' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
-		fi
+	name="${AURORA_PRESET:-}"
+	if [[ -z "$name" ]]; then
+		name="${PKG_PRESET_NAME:-AuroraOS}"
 	fi
 
-	# Append the preset, re-indexed to idx.
+	exclude_raw="$(kit_merge_exclude_filter "${PKG_EXCLUDE_FILTER:-}")"
+	perms_block="$(kit_permissions_block)"
+
+	escape_name="$(kit_escape_cfg "$name")"
+	escape_org="$(kit_escape_cfg "$PKG_ORG")"
+	escape_app="$(kit_escape_cfg "$PKG_APP")"
+	escape_title="$(kit_escape_cfg "$PKG_TITLE")"
+	escape_version="$(kit_escape_cfg "$PKG_VERSION")"
+	escape_release="$(kit_escape_cfg "$PKG_RELEASE")"
+	exclude="$(kit_escape_cfg "$exclude_raw")"
+
+	tmp="$(mktemp)"
+	kit_render_template \
+		"$KIT_TEMPLATES/export_presets.aurora.cfg" "$tmp" \
+		"PRESET_NAME=$escape_name" \
+		"ORG=$escape_org" \
+		"APP=$escape_app" \
+		"TITLE=$escape_title" \
+		"VERSION=$escape_version" \
+		"RELEASE=$escape_release" \
+		"EXCLUDE=$exclude" \
+		"PERMISSIONS_BLOCK=$perms_block"
+
+	kit_backup_file "$file"
+	mkdir -p -- "$(dirname -- "$file")"
+	if [[ ! -f "$file" ]]; then
+		: > "$file"
+	fi
+
+	if (( force )) && [[ -n "$(kit_aurora_preset_index "$file")" ]]; then
+		kit_remove_preset "$file" "$idx"
+	fi
+
+	# Гарантируем перевод строки перед новой секцией.
+	if [[ -s "$file" ]] && [[ -n "$(tail -c 1 -- "$file")" ]]; then
+		printf '\n' >> "$file"
+	fi
+
 	{
-		echo
+		printf '\n'
 		sed -e "s/^\[preset\.0\]$/[preset.${idx}]/" \
 			-e "s/^\[preset\.0\.options\]$/[preset.${idx}.options]/" \
 			"$tmp"
@@ -580,54 +710,88 @@ kit_write_aurora_preset() {
 
 	PKG_PRESET_INDEX="$idx"
 	PKG_PRESET_NAME="$name"
-	PKG_EXCLUDE_FILTER="$exclude"
-	kit_ok "created AuroraOS preset '$name' (index $idx) in $file"
+	PKG_EXCLUDE_FILTER="$exclude_raw"
+	kit_ok "создан пресет AuroraOS '$name' (индекс $idx) в $file"
 }
 
+# kit_merge_exclude_filter CURRENT — добавляет только build/* и каталог кита
+# (если кит лежит внутри проекта). Членство проверяется точным совпадением
+# токена, поэтому mybuild/* не считается build/*.
 kit_merge_exclude_filter() {
-	# Ensures kit/build/tooling folders never end up inside the PCK.
-	local current="$1"
-	local required=(build tools utilities)
-	local entry out="$current" kit_rel=""
-	if [[ "$KIT_ROOT" == "$PROJECT_ROOT"/* ]]; then
-		kit_rel="${KIT_ROOT#"$PROJECT_ROOT"/}"
+	local current="${1:-}"
+	local -a entries=() required=() parts=()
+	local token want found entry kit_rel="" joined=""
+
+	if [[ -n "$current" ]]; then
+		IFS=',' read -r -a parts <<< "$current"
+		for token in "${parts[@]}"; do
+			token="$(kit_trim "$token")"
+			[[ -n "$token" ]] && entries+=("$token")
+		done
 	fi
-	[[ -n "$kit_rel" ]] && required+=("$kit_rel")
-	# Documentation and tests never need to be inside the game PCK.
-	[[ -d "$PROJECT_ROOT/docs" ]] && required+=(docs)
-	[[ -d "$PROJECT_ROOT/tests" ]] && required+=(tests)
-	for entry in "${required[@]}"; do
-		if [[ "$out" != *"$entry/*"* ]]; then
-			out="${out:+$out, }$entry/*"
+
+	required=("build/*")
+	if [[ -n "${PROJECT_ROOT:-}" && -n "${KIT_ROOT:-}" ]]; then
+		local kit_norm root_norm
+		kit_norm="$(realpath -m -- "$KIT_ROOT")"
+		root_norm="$(realpath -m -- "$PROJECT_ROOT")"
+		if [[ -n "$root_norm" && "$kit_norm" == "$root_norm/"* ]]; then
+			kit_rel="${kit_norm#"$root_norm"/}"
+			[[ -n "$kit_rel" ]] && required+=("$kit_rel/*")
 		fi
+	fi
+
+	for want in "${required[@]}"; do
+		found=0
+		for entry in "${entries[@]}"; do
+			if [[ "$entry" == "$want" ]]; then
+				found=1
+				break
+			fi
+		done
+		(( found )) || entries+=("$want")
 	done
-	printf '%s\n' "$out"
+
+	for entry in "${entries[@]}"; do
+		joined="${joined:+$joined,}$entry"
+	done
+	printf '%s\n' "$joined"
 }
 
+# kit_patch_exclude_filter — дописывает build/* и каталог кита в exclude_filter
+# выбранного пресета. Файл предварительно копируется в backups/.
 kit_patch_exclude_filter() {
-	# Rewrites exclude_filter in an existing Aurora preset when kit/build folders
-	# are missing from it. Safe: backs the file up first.
-	local merged current idx="$PKG_PRESET_INDEX" tmp tmp2
+	local merged current idx="$PKG_PRESET_INDEX" tmp tmp2 has_line
 	[[ -n "$idx" ]] || return 0
 	current="$(kit_preset_value "$KIT_PRESET_FILE" "$idx" "exclude_filter" "")"
 	merged="$(kit_merge_exclude_filter "$current")"
 	[[ "$merged" == "$current" ]] && return 0
 	kit_backup_file "$KIT_PRESET_FILE"
 	tmp="$(mktemp)"
+	local escaped
+	escaped="$(kit_escape_cfg "$merged")"
 
-	# Phase 1: replace an existing exclude_filter line of the selected preset.
-	awk -v idx="$idx" -v value="$merged" '
+	# Пустая строка exclude_filter="" тоже считается существующей: наличие
+	# ключа проверяется отдельно, иначе появился бы дубликат.
+	has_line="$(awk -v idx="$idx" '
+		$0 == "[preset." idx "]" || $0 == "[preset." idx ".options]" { inside=1; next }
+		/^\[/ { inside=0; next }
+		inside && /^exclude_filter=/ { print "yes"; exit }
+	' "$KIT_PRESET_FILE")"
+
+	# Фаза 1: заменяем существующую строку exclude_filter выбранного пресета.
+	awk -v idx="$idx" -v value="$escaped" '
 		$0 == "[preset." idx "]" || $0 == "[preset." idx ".options]" { inside=1; print; next }
 		/^\[/ { inside=0; print; next }
 		inside && /^exclude_filter=/ { print "exclude_filter=\"" value "\""; next }
 		{ print }
 	' "$KIT_PRESET_FILE" > "$tmp"
 
-	# Phase 2: insert the line after export_filter when the selected preset
-	# had no exclude_filter (another preset's line must not count).
-	if [[ -z "$current" ]]; then
+	# Фаза 2: если строки не было, вставляем её после export_filter (строка
+	# другого пресета не должна считаться).
+	if [[ -z "$has_line" ]]; then
 		tmp2="$(mktemp)"
-		awk -v idx="$idx" -v value="$merged" '
+		awk -v idx="$idx" -v value="$escaped" '
 			$0 == "[preset." idx "]" || $0 == "[preset." idx ".options]" { inside=1; print; next }
 			/^\[/ { inside=0; print; next }
 			inside && /^export_filter=/ && !done { print; print "exclude_filter=\"" value "\""; done=1; next }
@@ -637,73 +801,177 @@ kit_patch_exclude_filter() {
 
 	mv "$tmp" "$KIT_PRESET_FILE"
 	PKG_EXCLUDE_FILTER="$merged"
-	kit_info "export exclude_filter extended with kit/build folders: $merged"
+	kit_info "exclude_filter расширен служебными каталогами: $merged"
 }
 
 # ---------------------------------------------------------------------------
-# Engine binaries
+# Движок и шаблоны экспорта
 # ---------------------------------------------------------------------------
 kit_engine_dir() {
 	printf '%s\n' "${AURORA_KIT_ENGINE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/godot-to-aurora/engine}"
 }
 
+# kit_find_godot — печатает путь к редактору Godot с экспортёром AuroraOS.
+# Диагностика идёт в stderr; вызывающий не должен глушить его.
 kit_find_godot() {
-	# Prints the path to a Godot editor binary with the AuroraOS exporter.
 	local candidate dir
 	if [[ -n "${GODOT_BIN:-}" ]]; then
-		[[ -x "$GODOT_BIN" ]] || kit_die "GODOT_BIN is not executable: $GODOT_BIN"
-		printf '%s\n' "$(kit_abspath "$GODOT_BIN")"
+		if [[ ! -x "$GODOT_BIN" ]]; then
+			kit_err "GODOT_BIN не исполняется: $GODOT_BIN"
+			return 1
+		fi
+		kit_abspath "$GODOT_BIN"
 		return 0
 	fi
-	for dir in "$(kit_engine_dir)" "$PROJECT_ROOT/utilities"; do
-		[[ -d "$dir" ]] || continue
-		candidate="$(find "$dir" -maxdepth 1 -type f -name 'Godot_v*auroraos*.x86_64' -perm -u+x 2>/dev/null | sort -V | tail -1)"
-		[[ -n "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
+	for dir in "$(kit_engine_dir)" "${PROJECT_ROOT:-}/utilities"; do
+		[[ -n "$dir" && -d "$dir" ]] || continue
+		candidate="$(find "$dir" -maxdepth 1 -type f -name 'Godot_v*auroraos*.x86_64' | sort -V | tail -1)"
+		[[ -n "$candidate" ]] || continue
+		if [[ -x "$candidate" ]]; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+		kit_err "найден $candidate, но он не исполняется: chmod +x '$candidate'"
 	done
-	candidate="$(command -v godot4 2>/dev/null || command -v godot 2>/dev/null || true)"
-	if [[ -n "$candidate" ]]; then
-		kit_warn "using $candidate, but stock Godot has no AuroraOS export platform."
-		printf '%s\n' "$candidate"
+	for candidate in godot4 godot; do
+		kit_has "$candidate" || continue
+		kit_warn "используется $candidate, но в обычном Godot нет платформы экспорта AuroraOS."
+		command -v -- "$candidate"
 		return 0
-	fi
+	done
 	return 1
 }
 
-kit_find_template() {
-	# kit_find_template <arch> [debug|release]
-	local arch="$1" mode="${2:-release}" dir candidate
-	if [[ -n "${AURORA_TEMPLATE:-}" ]]; then
-		[[ -f "$AURORA_TEMPLATE" ]] || kit_die "AURORA_TEMPLATE not found: $AURORA_TEMPLATE"
-		printf '%s\n' "$(kit_abspath "$AURORA_TEMPLATE")"
+# kit_verify_template_arch PATH ARCH — проверка ELF-архитектуры шаблона.
+# ARCH: x86_64 | aarch64. Диагностика в stderr, код возврата != 0 при
+# несовпадении. Без readelf — предупреждение и успех.
+kit_verify_template_arch() {
+	local path="$1" want="$2" machine="" actual=""
+	[[ -f "$path" ]] || { kit_err "шаблон не найден: $path"; return 1; }
+	case "$want" in
+		x86_64|aarch64) ;;
+		*) kit_err "неизвестная архитектура шаблона: $want (ожидается x86_64 или aarch64)"; return 1 ;;
+	esac
+	if ! kit_has readelf; then
+		kit_warn "readelf не найден; проверка ELF-архитектуры $path пропущена."
 		return 0
 	fi
-	for dir in "$(kit_engine_dir)" "$PROJECT_ROOT/utilities"; do
-		candidate="$dir/auroraos_${mode}.${arch}"
-		[[ -f "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
+	machine="$(LC_ALL=C readelf -h -- "$path" 2>/dev/null \
+		| awk -F: '/Machine:/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }')"
+	case "$machine" in
+		*X86-64*|*x86-64*) actual="x86_64" ;;
+		*AArch64*|*aarch64*) actual="aarch64" ;;
+		*)
+			kit_err "не удалось определить ELF-архитектуру $path (readelf Machine: '${machine:-?}')"
+			return 1
+			;;
+	esac
+	if [[ "$actual" != "$want" ]]; then
+		kit_err "шаблон $path собран для $actual, а нужен $want"
+		return 1
+	fi
+	return 0
+}
+
+# kit_find_template ARCH [release|debug]
+# Приоритет переменных окружения:
+#   AURORA_TEMPLATE_X86_64 / AURORA_TEMPLATE_AARCH64, затем AURORA_TEMPLATE.
+# Имена файлов в каталоге движка: auroraos_<mode>.x86_64 / auroraos_<mode>.arm64.
+kit_find_template() {
+	local arch="$1" mode="${2:-release}" dir candidate name="" env_var=""
+	case "$arch" in
+		x86_64|x86-64|x64)
+			arch="x86_64"
+			env_var="AURORA_TEMPLATE_X86_64"
+			name="auroraos_${mode}.x86_64"
+			;;
+		aarch64|arm64|arm64-v8a)
+			arch="aarch64"
+			env_var="AURORA_TEMPLATE_AARCH64"
+			name="auroraos_${mode}.arm64"
+			;;
+		*)
+			kit_err "неподдерживаемая архитектура шаблона: $arch"
+			return 1
+			;;
+	esac
+
+	local explicit="${!env_var:-}"
+	local legacy="${AURORA_TEMPLATE:-}"
+	local from_env=""
+	if [[ -n "$explicit" ]]; then
+		from_env="$explicit"
+	elif [[ -n "$legacy" ]]; then
+		from_env="$legacy"
+	fi
+	if [[ -n "$from_env" ]]; then
+		if [[ ! -f "$from_env" ]]; then
+			kit_err "переменная $env_var/AURORA_TEMPLATE указывает на отсутствующий файл: $from_env"
+			return 1
+		fi
+		kit_verify_template_arch "$from_env" "$arch" || return 1
+		kit_abspath "$from_env"
+		return 0
+	fi
+
+	for dir in "$(kit_engine_dir)" "${PROJECT_ROOT:-}/utilities"; do
+		[[ -n "$dir" && -d "$dir" ]] || continue
+		candidate="$dir/$name"
+		[[ -f "$candidate" ]] || continue
+		if kit_verify_template_arch "$candidate" "$arch"; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+		kit_err "пропускаю $candidate: неверная ELF-архитектура"
 	done
 	return 1
 }
 
 kit_verify_no_x11() {
 	local bin="$1" bad
-	[[ -f "$bin" ]] || { kit_warn "missing binary: $bin"; return 1; }
+	[[ -f "$bin" ]] || { kit_warn "нет файла: $bin"; return 1; }
 	if ! kit_has readelf; then
-		kit_warn "readelf is missing; skipping X11 dependency check."
+		kit_warn "readelf не найден; проверка зависимостей X11 пропущена."
 		return 0
 	fi
-	bad="$(readelf -d "$bin" 2>/dev/null | grep -Ei 'libX11|libxcb|libdecor|libXext' || true)"
+	bad="$(LC_ALL=C readelf -d "$bin" 2>/dev/null | grep -Ei 'libX11|libxcb|libdecor|libXext' || true)"
 	if [[ -n "$bad" ]]; then
-		kit_err "binary links against X11 components:"
+		kit_err "бинарник линкуется с X11:"
 		printf '%s\n' "$bad" >&2
 		return 1
 	fi
-	kit_info "Wayland-only check passed (no libX11/libxcb/libdecor NEEDED entries)."
-	readelf -d "$bin" 2>/dev/null | grep -Ei 'wayland|libEGL' | sed 's/^/  /' || true
+	kit_info "проверка Wayland-only пройдена (нет NEEDED libX11/libxcb/libdecor)."
+	LC_ALL=C readelf -d "$bin" 2>/dev/null | grep -Ei 'wayland|libEGL' | sed 's/^/  /' || true
 	return 0
 }
 
 # ---------------------------------------------------------------------------
-# Aurora SDK 5.x discovery
+# Версии инструментов сборки шаблона
+# ---------------------------------------------------------------------------
+# kit_xkbcommon_sha256 VERSION — печатает SHA-256 для известной версии
+# libxkbcommon. Неизвестная версия возвращает 1: сборка должна подсказать,
+# что добавить в versions.env, либо потребовать явный --skip-checksum.
+kit_xkbcommon_sha256() {
+	local version="$1" known
+	local -a known_versions
+	read -r -a known_versions <<<"${XKBCOMMON_KNOWN_VERSIONS:-}"
+	for known in "${known_versions[@]}"; do
+		if [[ "$version" == "$known" ]]; then
+			printf '%s\n' "$XKBCOMMON_SHA256"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# kit_xkbcommon_base_version VERSION — отбрасывает packaging-суффикс RPM
+# (1.3.1+git1 -> 1.3.1), чтобы скачать соответствующий архив заголовков.
+kit_xkbcommon_base_version() {
+	printf '%s\n' "${1%%+*}"
+}
+
+# ---------------------------------------------------------------------------
+# Aurora SDK 5.x
 # ---------------------------------------------------------------------------
 kit_sdk_home() { printf '%s\n' "${AURORA_SDK_HOME:-$HOME/AuroraOS}"; }
 
@@ -711,20 +979,26 @@ kit_sdk_version_dir() {
 	local home
 	home="$(kit_sdk_home)"
 	[[ -d "$home/sdk" ]] || return 0
-	find "$home/sdk" -maxdepth 1 -mindepth 1 -type d -name '[0-9]*' 2>/dev/null | sort -V | tail -1
+	find "$home/sdk" -maxdepth 1 -mindepth 1 -type d -name '[0-9]*' 2>/dev/null | sort -V | tail -1 || return 0
 }
 
+# kit_sdk_version — версия установленного SDK (имя каталога sdk/<версия>).
+kit_sdk_version() {
+	local dir
+	dir="$(kit_sdk_version_dir)"
+	[[ -n "$dir" ]] || return 0
+	basename -- "$dir"
+}
+
+# kit_sdk_tools_run — печатает путь к tools/run, если он есть.
+# Всегда возвращает 0: отсутствие SDK не должно ронять скрипты под set -e.
 kit_sdk_tools_run() {
 	local dir
 	dir="$(kit_sdk_version_dir)"
-	[[ -n "$dir" && -x "$dir/tools/run" ]] && printf '%s\n' "$dir/tools/run"
-}
-
-kit_sdk_sysroot() {
-	local dir
-	dir="$(kit_sdk_version_dir)"
-	[[ -n "$dir" && -d "$dir/targets/x86_64-meego-linux-gnu" ]] \
-		&& printf '%s\n' "$dir/targets/x86_64-meego-linux-gnu"
+	if [[ -n "$dir" && -x "$dir/tools/run" ]]; then
+		printf '%s\n' "$dir/tools/run"
+	fi
+	return 0
 }
 
 kit_sdk_image() {
@@ -735,19 +1009,29 @@ kit_sdk_image() {
 	local run image=""
 	run="$(kit_sdk_tools_run)"
 	if [[ -n "$run" ]]; then
-		image="$(grep -oE 'aurora-build-tools[^[:space:]]*' "$run" | head -1 || true)"
+		image="$(grep -oE 'aurora-build-tools[^[:space:]]*' "$run" 2>/dev/null | head -1 || true)"
 	fi
 	if [[ -z "$image" ]] && kit_has docker; then
 		image="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^aurora-build-tools' | sort -V | tail -1 || true)"
 	fi
 	printf '%s\n' "$image"
+	return 0
 }
 
-# Detects how the SDK build environment can be reached.
-# Sets KIT_SDK_MODE (sfdk|sb2|docker|none), KIT_SDK_TARGET, KIT_SDK_RUN, KIT_SDK_IMAGE.
+# kit_detect_sdk — определяет способ доступа к сборочному окружению SDK.
+# Заполняет KIT_SDK_MODE (sfdk|sb2|docker|none), KIT_SDK_TARGET, KIT_SDK_RUN,
+# KIT_SDK_IMAGE. Никогда не завершает скрипт.
 kit_detect_sdk() {
 	KIT_SDK_MODE="none"
 	KIT_SDK_TARGET="${X86_64_TARGET:-}"
+	KIT_SDK_VERSION="$(kit_sdk_version)"
+	KIT_SDK_SUPPORTED=1
+	export KIT_SDK_SUPPORTED
+	if [[ -n "$KIT_SDK_VERSION" && "$KIT_SDK_VERSION" != "$SDK_SUPPORTED_PREFIX"* ]]; then
+		KIT_SDK_SUPPORTED=0
+		kit_warn "Aurora SDK $KIT_SDK_VERSION не входит в поддерживаемую серию ${SDK_SUPPORTED_PREFIX}x (кит тестировался на $SDK_DEFAULT_VERSION)."
+		kit_warn "Сборка/деплой продолжатся; используйте --strict-sdk, чтобы блокировать несовместимую версию."
+	fi
 	KIT_SDK_RUN="$(kit_sdk_tools_run)"
 	KIT_SDK_IMAGE="$(kit_sdk_image)"
 
@@ -761,13 +1045,13 @@ kit_detect_sdk() {
 	fi
 
 	if [[ -n "$sfdk_bin" ]]; then
-		# SDK 5.2 dropped `engine`; older SDKs expose sb2 targets there.
+		# В SDK 5.2 нет `engine`; старые SDK показывают sb2-таргеты там.
 		targets="$(timeout 15 "$sfdk_bin" engine exec sb2-config -l 2>/dev/null || true)"
 		if grep -qE '^AuroraOS-.*x86_64' <<<"$targets"; then
 			KIT_SDK_MODE="sfdk"
 			if [[ -z "$KIT_SDK_TARGET" ]]; then
 				KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64.*\.default$' <<<"$targets" | head -1 || true)"
-				[[ -n "$KIT_SDK_TARGET" ]] || KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64' <<<"$targets" | head -1)"
+				[[ -n "$KIT_SDK_TARGET" ]] || KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64' <<<"$targets" | head -1 || true)"
 			fi
 			return 0
 		fi
@@ -779,7 +1063,7 @@ kit_detect_sdk() {
 			KIT_SDK_MODE="sb2"
 			if [[ -z "$KIT_SDK_TARGET" ]]; then
 				KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64.*\.default$' <<<"$targets" | head -1 || true)"
-				[[ -n "$KIT_SDK_TARGET" ]] || KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64' <<<"$targets" | head -1)"
+				[[ -n "$KIT_SDK_TARGET" ]] || KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64' <<<"$targets" | head -1 || true)"
 			fi
 			return 0
 		fi
@@ -792,12 +1076,14 @@ kit_detect_sdk() {
 	fi
 
 	candidate="$(kit_sdk_version_dir)"
-	[[ -n "$candidate" ]] && kit_info "SDK found at $candidate but no usable build environment yet."
+	if [[ -n "$candidate" ]]; then
+		kit_info "SDK найден в $candidate, но сборочного окружения нет (ожидается Aurora SDK $SDK_DEFAULT_VERSION+)."
+	fi
 	return 0
 }
 
 kit_sdk_description() {
-	case "$KIT_SDK_MODE" in
+	case "${KIT_SDK_MODE:-none}" in
 		sfdk)   printf 'sfdk/sb2 target %s\n' "$KIT_SDK_TARGET" ;;
 		sb2)    printf 'host sb2 target %s\n' "$KIT_SDK_TARGET" ;;
 		docker) printf 'docker image %s via %s\n' "$KIT_SDK_IMAGE" "$KIT_SDK_RUN" ;;
@@ -805,12 +1091,15 @@ kit_sdk_description() {
 	esac
 }
 
-# Converts a host path under the project into the container path used by
-# Aurora SDK 5.x tools/run (which mounts the project at /workspace).
+# kit_to_workspace_path PATH — путь внутри проекта в /workspace (SDK 5.2
+# монтирует проект туда). Границы проверяются после нормализации: соседний
+# каталог /home/u/game-old не считается частью /home/u/game.
 kit_to_workspace_path() {
-	local path="$1"
-	if [[ "$path" == "$PROJECT_ROOT"* ]]; then
-		printf '/workspace%s\n' "${path#"$PROJECT_ROOT"}"
+	local path root
+	path="$(realpath -m -- "$1")"
+	root="$(realpath -m -- "${PROJECT_ROOT:-.}")"
+	if [[ -n "$root" && ( "$path" == "$root" || "$path" == "$root/"* ) ]]; then
+		printf '/workspace%s\n' "${path#"$root"}"
 	else
 		printf '%s\n' "$path"
 	fi
@@ -819,17 +1108,13 @@ kit_to_workspace_path() {
 kit_find_sfdk() {
 	if [[ -n "${SFDK:-}" && -x "$SFDK" ]]; then printf '%s\n' "$SFDK"; return 0; fi
 	if [[ -x "$(kit_sdk_home)/bin/sfdk" ]]; then printf '%s\n' "$(kit_sdk_home)/bin/sfdk"; return 0; fi
-	kit_has sfdk && { command -v sfdk; return 0; }
+	if kit_has sfdk; then command -v -- sfdk; return 0; fi
 	return 1
 }
 
 # ---------------------------------------------------------------------------
-# Misc
+# Прочее
 # ---------------------------------------------------------------------------
-kit_require_python_free_tools() {
-	:
-}
-
 kit_version_banner() {
 	printf 'godot-to-aurora %s\n' "$KIT_VERSION"
 }

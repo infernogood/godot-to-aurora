@@ -10,14 +10,19 @@ GitHub ограничивает размер одного файла в репо
 
 | Asset | Размер | Назначение | Обязателен |
 |---|---|---|---|
-| `Godot_v4.7.2-auroraos1_linux.x86_64` | ~156 МБ | редактор с экспортёром AuroraOS | да |
+| `Godot_v<GODOT_AURORA_TAG>_linux.x86_64` | ~156 МБ | редактор с экспортёром AuroraOS | да |
 | `auroraos_release.x86_64` | ~58 МБ | Wayland/GLES3-шаблон для эмулятора | да (для x86_64 RPM) |
 | `auroraos_release.arm64` | ~58 МБ | релизный шаблон для устройств | да (для aarch64 RPM) |
 | `auroraos_debug.arm64` | ~62 МБ | debug-шаблон для устройств | рекомендуется |
-| `SHA256SUMS` | < 1 КБ | контрольные суммы | рекомендуется |
+| `SHA256SUMS` | < 1 КБ | контрольные суммы (проверка обязательна) | **да** |
+
+Имена файлов приходят из `versions.env`: `GODOT_AURORA_TAG` (`4.7.2-auroraos1`),
+`GODOT_TEMPLATE_VERSION` (`4.7.2.stable`) и `KIT_VERSION`. Меняешь движок — правь
+`versions.env`, а не скрипты.
 
 Больше ничего не нужно: исходники форка, `.zip`-архивы, Windows-шаблоны и RPM самого
-движка к киту отношения не имеют.
+движка к киту отношения не имеют. Без `SHA256SUMS` `fetch_engine.sh` отказывается
+устанавливать скачанные файлы (см. §5).
 
 ---
 
@@ -27,10 +32,10 @@ GitHub ограничивает размер одного файла в репо
 
 ```
 aurora-export/engine/
-├── Godot_v4.7.2-auroraos1_linux.x86_64
+├── Godot_v4.7.2-auroraos1_linux.x86_64   # = Godot_v<GODOT_AURORA_TAG>_linux.x86_64
 ├── auroraos_release.arm64
 ├── auroraos_debug.arm64
-└── auroraos_release.x86_64      # собран один раз в контейнере SDK 5.2
+└── auroraos_release.x86_64              # собран один раз в контейнере SDK 5.2
 ```
 
 Вариант B — скачать редактор и ARM-шаблоны из релизов форка
@@ -49,6 +54,10 @@ readelf -d auroraos_release.x86_64 | grep -Ei 'wayland|libEGL'                  
 
 ## 3. Собери контрольные суммы
 
+`SHA256SUMS` обязателен: `fetch_engine.sh` без него (или с отсутствующим/несовпавшим
+хэшем) завершается с ошибкой. Отключается только явным `--skip-checksum`, который нужен
+лишь для отладки чужих сборок.
+
 ```bash
 mkdir -p ~/release-assets
 cp ~/AuroraProjects/engine/{Godot_v4.7.2-auroraos1_linux.x86_64,auroraos_release.x86_64,auroraos_release.arm64,auroraos_debug.arm64} ~/release-assets/
@@ -61,8 +70,12 @@ sha256sum Godot_v4.7.2-auroraos1_linux.x86_64 auroraos_release.x86_64 \
 
 ```bash
 ./godot-to-aurora/scripts/fetch_engine.sh --from-dir ~/release-assets \
-  --dest ~/release-assets/installed --no-templates --write-sums
+  --dest ~/release-assets/installed --no-templates --skip-checksum --write-sums
 ```
+
+`--skip-checksum` здесь нужен потому, что `SHA256SUMS` ещё не создан: `--write-sums`
+генерирует его для уже установленных файлов. Для обычной установки проверка остаётся
+обязательной.
 
 ---
 
@@ -109,20 +122,22 @@ AURORA_KIT_REPO=other-owner/godot-to-aurora ./scripts/fetch_engine.sh
   --release-base https://github.com/infernogood/godot-to-aurora/releases/download/engine-4.7.2-auroraos1
 ```
 
-Тег по умолчанию — `engine-4.7.2-auroraos1`; переопределяется `AURORA_KIT_RELEASE_TAG`
-или `--release-tag`.
+Тег по умолчанию — `engine-<GODOT_AURORA_TAG>` (сейчас `engine-4.7.2-auroraos1`);
+переопределяется `AURORA_KIT_RELEASE_TAG` или `--release-tag`.
 
-`fetch_engine.sh` сам скачает `SHA256SUMS`, проверит файлы и установит:
+`fetch_engine.sh` сам скачает `SHA256SUMS` и **обязательно** проверит файлы: отсутствие
+файла сумм, отсутствие нужного хэша или несовпадение — ошибка с ненулевым кодом.
+`--skip-checksum` отключает проверку осознанно (только для отладки). Устанавливается:
 
 * редактор и шаблоны — в `~/.local/share/godot-to-aurora/engine/`;
 * `auroraos_release.arm64` и `auroraos_debug.arm64` — в
-  `~/.local/share/godot/export_templates/4.7.2.stable/`.
+  `~/.local/share/godot/export_templates/<GODOT_TEMPLATE_VERSION>/`
+  (сейчас `4.7.2.stable`); `version.txt` перезаписывается при смене версии.
 
 ### Проверка «как у пользователя»
 
 ```bash
 TMPH=$(mktemp -d)
-AURORA_KIT_REPO=<owner>/godot-to-aurora \
 XDG_DATA_HOME="$TMPH" \
   ./scripts/fetch_engine.sh
 
@@ -138,13 +153,14 @@ rm -rf "$TMPH"
 Когда выйдет новый тег форка (например, `4.7.3-auroraos1`):
 
 1. собери/скачай новые бинарники и x86_64-шаблон;
-2. обнови версии/имена в скриптах:
-   * `EDITOR_ASSET` в `scripts/fetch_engine.sh`,
-   * `AURORA_GODOT_TAG` и `TEMPLATE_ASSET`/`TEMPLATE_ARCH` в `scripts/build_x86_64_rpm.sh`,
-   * `GODOT_TEMPLATE_VERSION` (переменная окружения, используется `fetch_engine.sh`; при
-     новой версии движка поменяй дефолт на `4.7.3.stable`);
-3. обнови `docs/SDK_5_2_ARCHITECTURE.md`, `README.md` и `AGENTS.md` (версии, имена файлов);
-4. создай новый Release, например `engine-4.7.3-auroraos1`;
+2. обнови **только** [`versions.env`](../versions.env) в корне репозитория:
+   `GODOT_AURORA_TAG` (тег форка), `GODOT_TEMPLATE_VERSION` (`4.7.3.stable`), при
+   необходимости `KIT_VERSION`/`SDK_DEFAULT_VERSION`; остальные скрипты читают эти
+   значения оттуда;
+3. обнови текст документации, где версии упомянуты явно (`README.md`,
+   `docs/SDK_5_2_ARCHITECTURE.md`, `CHANGELOG.md`);
+4. создай новый Release, например `engine-4.7.3-auroraos1`, и приложи свежий
+   `SHA256SUMS`;
 5. проверь `fetch_engine.sh --check` и полный цикл `build_x86_64_rpm.sh` на тестовой игре.
 
 Не перезаписывай ассеты существующего тега: старые установки могут кэшировать суммы.
@@ -169,7 +185,7 @@ rm -rf "$TMPH"
 * Godot и форк `savegame/godot` — MIT. Распространение собранных бинарников допустимо;
   сохраняй уведомление об авторских правах и текст лицензии движка (например, в
   `docs/THIRD_PARTY.md` при желании).
-* Шрифты Liberation в ките — SIL OFL 1.1; лицензии лежат рядом со шрифтами.
+* Шрифты Liberation в ките — SIL OFL 1.1; один файл `modules/fonts/LICENSE`.
 * Игра пользователя и её ассеты в кит не входят и не публикуются.
 
 ---
@@ -178,7 +194,8 @@ rm -rf "$TMPH"
 
 - [ ] 5 файлов (редактор, 3 шаблона, `SHA256SUMS`) прикреплены к тегу;
 - [ ] `readelf -d` x86_64-шаблона не показывает X11;
-- [ ] `fetch_engine.sh` с `AURORA_KIT_REPO` скачивает и проверяет суммы;
+- [ ] `fetch_engine.sh` с `AURORA_KIT_REPO` скачивает и проверяет суммы (без
+      `SHA256SUMS` или с несовпавшим хэшем — ненулевой код выхода);
 - [ ] `fetch_engine.sh --check` показывает все `[ok]`;
 - [ ] `build_x86_64_rpm.sh --check` считает окружение готовым;
 - [ ] на чистой копии игры собирается RPM (~30 с после первого импорта);

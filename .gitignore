@@ -33,3 +33,6 @@ Thumbs.db
 .vscode/
 __pycache__/
 *.pyc
+
+# Временный staging ключей подписи (см. deploy_emulator.sh)
+build/.signing.*/

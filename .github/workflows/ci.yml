@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: shellcheck, bash -n, CLI-тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить shellcheck (если его нет)
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+          shellcheck --version
+
+      - name: shellcheck
+        run: >
+          shellcheck
+          scripts/*.sh
+          scripts/lib/*.sh
+          tests/test_cli.sh
+          tests/run_modules.sh
+
+      - name: bash -n
+        run: |
+          for file in scripts/*.sh scripts/lib/*.sh tests/test_cli.sh tests/run_modules.sh; do
+            bash -n "$file"
+          done
+
+      - name: CLI-тесты
+        run: bash tests/test_cli.sh
+
+  modules:
+    name: headless-тесты модулей
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Скачать Godot 4.7.2-stable
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/godot.zip" \
+            "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip"
+          unzip -q -o "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64"
+          echo "GODOT_BIN=$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Тесты модулей
+        run: bash tests/run_modules.sh

@@ -3,20 +3,23 @@
 The Aurora export templates are built with `fontconfig=no`, so `SystemFont` cannot
 find host fonts on the device. Ship these files inside the game instead.
 
-| File | Use |
-|---|---|
-| `LiberationMono-Regular.ttf` | HUD, terminal/CRT screens, number plates, `Label3D` fallback |
-| `LiberationSans-Regular.ttf` | body text, dialogs, long descriptions |
-| `LiberationSans-Bold.ttf` | headings and modal titles |
+Canonical install path — copy the `.ttf` files (and the single `LICENSE`) into the
+project at `res://assets/fonts/`:
 
-Copy them into the project (suggested path `assets/fonts/`) together with the two
-license files:
+| Source (`modules/fonts/`) | Destination (`assets/fonts/`) | Use |
+|---|---|---|
+| `LiberationSans-Regular.ttf` | `assets/fonts/LiberationSans-Regular.ttf` | body text, dialogs, long descriptions |
+| `LiberationSans-Bold.ttf` | `assets/fonts/LiberationSans-Bold.ttf` | headings and modal titles |
+| `LiberationMono-Regular.ttf` | `assets/fonts/LiberationMono-Regular.ttf` | monospaced UI: HUD readouts, code, `Label3D` fallback |
+| `LICENSE` | `assets/fonts/LICENSE` | SIL Open Font License 1.1, covers all three files |
 
 ```bash
 mkdir -p assets/fonts
 cp godot-to-aurora/modules/fonts/*.ttf assets/fonts/
-cp godot-to-aurora/modules/fonts/LICENSE* assets/fonts/
+cp godot-to-aurora/modules/fonts/LICENSE assets/fonts/
 ```
+
+There is exactly one license file (`LICENSE`). Do not add a per-family copy.
 
 Then:
 
@@ -29,4 +32,4 @@ Then:
 
 Coverage checked: Cyrillic (ru/uk), `«»`, em dash, `№`, `→`.
 
-License: SIL Open Font License 1.1. See `LICENSE` and `LICENSE-LiberationSans`.
+License: SIL Open Font License 1.1. See `LICENSE` (single file, covers all fonts).
