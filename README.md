@@ -25,7 +25,84 @@ saves, `rpmsign-external` with SDK test keys, and APM installation over D-Bus.
 
 ---
 
+## Первый запуск с нуля
+
+Этот раздел — для чистой машины. Если `build_x86_64_rpm.sh --check` уже проходит,
+переходи к «Быстрому старту».
+
+### 1. Aurora SDK 5.2.1.200
+
+Установи SDK через установщик Aurora SDK (`SDKMaintenanceTool`) и проверь:
+
+```bash
+~/AuroraOS/bin/sfdk --version
+~/AuroraOS/bin/sfdk device list
+```
+
+Если SDK установлен в другой каталог, задай `AURORA_SDK_HOME=/path/to/AuroraOS`.
+Кит проверяет серию SDK: `5.2.x` поддерживается, на `5.1.x`/`5.3.x` будет
+предупреждение, а с `--strict-sdk` — ошибка.
+
+### 2. Docker и образ сборки
+
+Установщик SDK загружает `sdk-build-tools-5.2.1.200-x86_64.tar` и тегирует образ
+как `aurora-build-tools-<user>:5.2.1.200`. Проверь, что образ виден Docker:
+
+```bash
+docker images --format '{{.Repository}}:{{.Tag}}' | grep '^aurora-build-tools'
+```
+
+Если образ отсутствует, переустанови компонент Build Tools в SDK. Другой образ
+можно указать явно: `AURORA_BUILD_IMAGE=registry/aurora-build-tools:tag`.
+
+### 3. Инструменты хоста
+
+Нужны `git`, `curl`, `python3`, `patchelf`, `readelf` и один из рендереров иконок —
+`magick` (ImageMagick) или `rsvg-convert`. Например, на Fedora:
+
+```bash
+sudo dnf install -y git curl python3 patchelf binutils ImageMagick
+```
+
+`patchelf` нужен только для x86_64: он прописывает RPATH на приватную
+`libxkbcommon` внутри пакета.
+
+### 4. KVM и эмулятор
+
+Проверь `/dev/kvm` и доступ к нему:
+
+```bash
+ls -l /dev/kvm
+sudo modprobe kvm_intel   # или kvm_amd
+sudo setfacl -m u:$USER:rw /dev/kvm
+```
+
+Запусти эмулятор из SDK. `sfdk device list` должен показать устройство
+`Aurora OS эмулятор 5.2.1.200` (`defaultuser@127.0.0.1:2223`).
+
+### 5. Ключи подписи
+
+SDK кладёт тестовые ключи в `~/AuroraOS/package-signing/regular_key.pem` и
+`regular_cert.pem`; `deploy_emulator.sh` находит их сам. Не копируй ключи в
+репозиторий. Для своих ключей есть `AURORA_SIGN_KEY` и `AURORA_SIGN_CERT`.
+
+### 6. Проверка окружения
+
+После установки движка (шаг 3 «Быстрого старта») выполни:
+
+```bash
+./godot-to-aurora/scripts/build_x86_64_rpm.sh --check
+```
+
+Команда `--check` должна сообщить, что окружение готово. Если чего-то не хватает,
+она перечислит компоненты и подскажет, что установить.
+
+---
+
 ## Быстрый старт
+
+> Если Aurora SDK и Docker ещё не настроены, сначала выполни раздел
+> [«Первый запуск с нуля»](#первый-запуск-с-нуля).
 
 ### 1. Скопируй кит в проект
 
@@ -37,8 +114,10 @@ git clone <этот-репозиторий> godot-to-aurora
 
 Не переименовывай каталог без необходимости: агентские команды и подсказки в документации
 используют имя `godot-to-aurora/`. Скрипты работают и при копировании содержимого
-прямо в корень проекта. В корне кита лежит `.gdignore`, поэтому Godot не сканирует его
-на месте — модули и шрифты нужно скопировать в проект (шаг 2).
+прямо в корень проекта. Если каталог кита лежит **внутри** проекта, создай в нём
+пустой `godot-to-aurora/.gdignore` до первого открытия Godot: иначе движок
+просканирует `modules/*.gd` и выдаст `Class "AuroraSafeArea" hides a global script class`.
+Модули и шрифты всё равно нужно скопировать в проект (шаг 2).
 
 ### 2. Подключи модули (единственный канонический путь)
 
@@ -123,7 +202,6 @@ godot-to-aurora/
 ├── CHANGELOG.md                  история изменений (Keep a Changelog)
 ├── versions.env                  KIT_VERSION, теги движка и SDK, версии SCons/xkbcommon
 ├── .gitignore                    build/, *.rpm, движок, ключи — вне Git
-├── .gdignore                     Godot не сканирует кит, лежащий внутри проекта
 ├── .editorconfig                 utf-8, LF, отступы для sh/gd/yml
 ├── scripts/
 │   ├── fetch_engine.sh           Aurora-редактор + шаблоны + export_templates
@@ -378,6 +456,8 @@ GODOT_BIN=/path/to/Godot bash tests/run_modules.sh   # headless-модули
 * [docs/SDK_5_2_ARCHITECTURE.md](docs/SDK_5_2_ARCHITECTURE.md) — SDK 5.2, QEMU/KVM,
   `tools/run`, `rpmsign-external`, APM, Sailjail.
 * [docs/RELEASES_GUIDE.md](docs/RELEASES_GUIDE.md) — как опубликовать бинарники движка.
+* [docs/ENGINE_RELEASE_4.7.2-auroraos1.md](docs/ENGINE_RELEASE_4.7.2-auroraos1.md) — состав,
+  контрольные суммы и происхождение релиза движка.
 * [CHANGELOG.md](CHANGELOG.md) — что изменилось между версиями кита.
 
 ---

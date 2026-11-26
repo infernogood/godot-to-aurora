@@ -26,8 +26,9 @@
   (по умолчанию печатается предупреждение).
 - Переменные `AURORA_TEMPLATE_X86_64` / `AURORA_TEMPLATE_AARCH64` (устаревшая
   `AURORA_TEMPLATE` работает для обеих архитектур).
-- Корневой `.gdignore`: Godot не сканирует кит, лежащий внутри проекта, — исчезают
-  ошибка `Class "AuroraSafeArea" hides a global script class` и двойной импорт шрифтов.
+- Правило интеграции: если каталог кита лежит внутри проекта, создайте в нём пустой
+  `.gdignore` до первого открытия Godot — иначе появится ошибка
+  `Class "AuroraSafeArea" hides a global script class` и двойной импорт шрифтов.
 - Корневой `.gitignore` кита и идемпотентное дополнение `.gitignore` целевого проекта
   (`build/`, `*.rpm`, `export_presets.cfg.bak.*`).
 - `.editorconfig`, `CHANGELOG.md`, `docs/RELEASES_GUIDE.md` в актуальном виде.
@@ -36,6 +37,9 @@
   (`.github/workflows/ci.yml`): `shellcheck`, `bash -n`, CLI-тесты, headless-прогон.
 - `%changelog` в `templates/app.spec.in` и ссылка на официальную документацию по
   профилям безопасности Sailjail в `docs/SDK_5_2_ARCHITECTURE.md`.
+- GitHub Release `engine-4.7.2-auroraos1` с редактором Godot, шаблонами x86_64/arm64
+  и `SHA256SUMS`; состав и происхождение — в
+  [`docs/ENGINE_RELEASE_4.7.2-auroraos1.md`](docs/ENGINE_RELEASE_4.7.2-auroraos1.md).
 
 ### Changed
 

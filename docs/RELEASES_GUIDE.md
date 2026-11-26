@@ -93,8 +93,11 @@ gh release create "$TAG" \
   ~/release-assets/auroraos_debug.arm64 \
   ~/release-assets/SHA256SUMS \
   --title "Godot 4.7.2 AuroraOS toolchain" \
-  --notes "Aurora-enabled Godot editor and export templates used by godot-to-aurora."
+  --notes-file docs/ENGINE_RELEASE_4.7.2-auroraos1.md
 ```
+
+Заметки релиза с составом, контрольными суммами и происхождением лежат в
+[`docs/ENGINE_RELEASE_4.7.2-auroraos1.md`](ENGINE_RELEASE_4.7.2-auroraos1.md).
 
 Без `gh` можно создать релиз в веб-интерфейсе GitHub и прикрепить те же пять файлов.
 
