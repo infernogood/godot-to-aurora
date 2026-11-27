@@ -265,35 +265,7 @@ build/backups/export_presets.cfg.bak.<timestamp>       # если пресет �
 
 ---
 
-## Модули
-
-`safe_area_helper.gd` — статический хелпер: отдаёт `{"l","t","r","b","valid"}`, игнорируя
-нулевую safe area и оконный режим на ПК, пересчитывает отступы в координаты вьюпорта и
-считает `ui_scale` через `minf` с ограничением `0.85…1.5`; `touch_target` даёт 48 dp с
-поправкой на DPI.
-
-```gdscript
-var vp := get_viewport().get_visible_rect().size
-var insets := AuroraSafeArea.insets(vp)
-var ui_scale := AuroraSafeArea.ui_scale(vp)
-panel.offset_left = float(insets["l"]) + 24.0 * ui_scale
-button.custom_minimum_size = Vector2.ONE * AuroraSafeArea.touch_target(ui_scale)
-```
-
-`aurora_lifecycle.gd` (autoload `AuroraLifecycle`) — ориентация, пауза и энергосбережение
-по сворачиванию (`OS.low_processor_usage_mode`, `Engine.max_fps`), мьют `Master`, сигнал
-`autosave_requested`; на десктопе пауза по потере фокуса — только при
-`pause_on_desktop_focus_loss = true`, размораживает `resume_game()`.
-
-`save_service.gd` (autoload `SaveService`) — атомарный JSON в `user://` (`tmp` + `rename`
-без предварительного удаления цели), восстановление из `.tmp` при повреждённом файле,
-версия формата с хуком миграции (`expected_version` + `Callable`), транслитерация и
-хэш-суффикс имён слотов, API `save/load_slot/has_slot/erase_slot/list_slots/clear_all`.
-Совместим с `--headless --script`. Подключение — шаг 1 ручного пути выше.
-
----
-
-## Сборка для устройства (aarch64)
+## Сборка для реального устройства (aarch64)
 
 Штатный экспортёр Авроры в форке Godot вызывает `sfdk engine exec sb2`, которого в SDK
 5.2 больше нет, поэтому кит упаковывает aarch64-RPM нативно — с шаблоном
