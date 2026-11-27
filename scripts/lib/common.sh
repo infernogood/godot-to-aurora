@@ -32,16 +32,23 @@ if [[ -f "$KIT_VERSIONS_FILE" ]]; then
 	source "$KIT_VERSIONS_FILE"
 fi
 
-KIT_VERSION="${KIT_VERSION:-1.1.0}"
+KIT_VERSION="${KIT_VERSION:-1.1.1}"
 GODOT_AURORA_TAG="${GODOT_AURORA_TAG:-4.7.2-auroraos1}"
+GODOT_AURORA_SHA="${GODOT_AURORA_SHA:-17d8f3f283a00a1182da7b797edb85eacd831091}"
 GODOT_TEMPLATE_VERSION="${GODOT_TEMPLATE_VERSION:-4.7.2.stable}"
 SDK_DEFAULT_VERSION="${SDK_DEFAULT_VERSION:-5.2.1.200}"
 SDK_SUPPORTED_PREFIX="${SDK_SUPPORTED_PREFIX:-5.2.}"
 SCONS_VERSION="${SCONS_VERSION:-4.11.1}"
 SCONS_SHA256="${SCONS_SHA256:-454cef364348053422696e3d2ecb4fa593c96a624f955842eaaea64f95c8d11d}"
 XKBCOMMON_VERSION="${XKBCOMMON_VERSION:-1.3.1}"
-XKBCOMMON_SHA256="${XKBCOMMON_SHA256:-8eda6782c6ed4b83296521f2f7e6bea88aba76d49c39fb4fce0f8d355a9181ce}"
+XKBCOMMON_SHA256="${XKBCOMMON_SHA256:-b3c710d27a2630054e1e1399c85b7f330ef03359b460f0c1b3b587fd01fe9234}"
 XKBCOMMON_KNOWN_VERSIONS="${XKBCOMMON_KNOWN_VERSIONS:-1.3.1 1.3.1+git1}"
+# Известные SHA-256 релизных бинарников (второй якорь поверх SHA256SUMS).
+# Пустое значение = проверка по этому якорю не выполняется.
+EDITOR_SHA256="${EDITOR_SHA256:-28299973ea042a82b42dcdecac6a8c3d1c50c465924bf638306f1d42ac947633}"
+X64_TEMPLATE_SHA256="${X64_TEMPLATE_SHA256:-95b1fd82768d055005163b27d4756fcea4a30323e3dab48ad6301e07654c7490}"
+ARM64_RELEASE_SHA256="${ARM64_RELEASE_SHA256:-4804de5937fdb33a512e805edb1f5aeb3aa128c6e1dff185e19a8f3b2c45e89e}"
+ARM64_DEBUG_SHA256="${ARM64_DEBUG_SHA256:-f9e1606aa48ae5818a69184439a1a099ab736757665d38d6e5d81a98a7f58391}"
 
 # ---------------------------------------------------------------------------
 # Логирование
@@ -181,17 +188,26 @@ kit_ensure_project_gitignore() {
 
 kit_download() {
 	# kit_download <url> <dest>
+	# Качает в <dest>.part и НЕ переименовывает: проверка контрольной суммы
+	# должна пройти до mv, иначе битая загрузка уничтожит рабочий файл.
 	local url="$1" dest="$2"
 	kit_has curl || kit_die "для загрузки $url требуется curl"
 	mkdir -p -- "$(dirname -- "$dest")"
 	kit_log "загрузка $(basename -- "$dest")…"
-	curl --fail --location --retry 3 --retry-delay 2 \
+	if ! curl --fail --location --retry 3 --retry-delay 2 \
 		--connect-timeout 30 --progress-bar \
-		--output "$dest.part" "$url" || {
+		--output "$dest.part" "$url"; then
 		rm -f -- "$dest.part"
-		kit_die "не удалось загрузить: $url"
-	}
-	mv -- "$dest.part" "$dest"
+		kit_err "не удалось загрузить: $url"
+		return 1
+	fi
+}
+
+# kit_commit_download <dest> — переносит проверенный <dest>.part на место.
+kit_commit_download() {
+	local dest="$1"
+	[[ -f "$dest.part" ]] || kit_die "нет загруженного файла: $dest.part"
+	mv -f -- "$dest.part" "$dest"
 }
 
 # ---------------------------------------------------------------------------
@@ -232,6 +248,7 @@ kit_read_project_setting() {
 			leaf = substr(full, length(sect) + 2)
 			cur = ""
 		}
+		{ sub(/\r$/, "") }
 		/^[[:space:]]*\[/ {
 			cur = $0
 			sub(/^[[:space:]]*\[/, "", cur)
@@ -275,6 +292,7 @@ kit_aurora_preset_index() {
 	[[ -f "$file" ]] || return 0
 	local -a candidates=()
 	mapfile -t candidates < <(awk '
+		{ sub(/\r$/, "") }
 		/^\[preset\.[0-9]+\]$/ {
 			idx = $0
 			sub(/^\[preset\./, "", idx)
@@ -304,6 +322,7 @@ kit_preset_value() {
 	[[ -f "$file" && -n "$idx" ]] || { printf '%s\n' "$fallback"; return 0; }
 	value="$(awk -v idx="$idx" -v key="$key" '
 		BEGIN { inside = 0 }
+		{ sub(/\r$/, "") }
 		/^\[/ {
 			inside = ($0 == "[preset." idx "]" || $0 == "[preset." idx ".options]")
 			next
@@ -359,6 +378,7 @@ kit_remove_preset() {
 	local file="$1" idx="$2"
 	[[ -f "$file" && -n "$idx" ]] || return 0
 	awk -v idx="$idx" '
+		{ sub(/\r$/, "") }
 		BEGIN { skip = 0 }
 		/^\[/ {
 			if ($0 == "[preset." idx "]" || $0 == "[preset." idx ".options]") { skip = 1; next }
@@ -388,9 +408,13 @@ kit_escape_spec() {
 	printf '%s\n' "$value"
 }
 
-# kit_escape_desktop VALUE — для .desktop: только удаление управляющих символов.
+# kit_escape_desktop VALUE — для .desktop: управляющие символы удаляются,
+# обратный слэш экранируется (Exec/TryExec не должны ломать строку).
 kit_escape_desktop() {
-	printf '%s\n' "$(kit_strip_control_chars "$1")"
+	local value
+	value="$(kit_strip_control_chars "$1")"
+	value="${value//\\/\\\\}"
+	printf '%s\n' "$value"
 }
 
 # kit_escape_cfg VALUE — для export_presets.cfg: экранируются '\' и '"'.
@@ -413,7 +437,12 @@ AURORA_PERMISSION_KEYS=(
 
 kit_translit() {
 	# Минимальная транслитерация ru/uk -> latin: имя пакета должно быть ASCII.
+	# Под LC_ALL=C bash не переводит кириллицу в нижний регистр, поэтому
+	# внутри функции явно выставляется UTF-8-локаль (и восстанавливается).
 	local input="$1" out="" ch lower
+	local prev_lc="${LC_ALL:-}" had_lc=0
+	[[ -n "${LC_ALL+set}" ]] && had_lc=1
+	export LC_ALL=C.UTF-8
 	local -A map=(
 		[а]=a [б]=b [в]=v [г]=g [д]=d [е]=e [ё]=e [ж]=zh [з]=z [и]=i
 		[й]=y [к]=k [л]=l [м]=m [н]=n [о]=o [п]=p [р]=r [с]=s [т]=t
@@ -430,13 +459,18 @@ kit_translit() {
 			out+="$ch"
 		fi
 	done
+	if (( had_lc )); then export LC_ALL="$prev_lc"; else unset LC_ALL; fi
 	printf '%s\n' "$out"
 }
 
 kit_slug() {
 	# ASCII slug: только [a-z0-9_], повторы разделителей схлопываются.
-	local raw
+	# tr и sed тоже зависят от локали — фиксируем UTF-8 на время вызова.
+	local raw prev_lc="${LC_ALL:-}" had_lc=0
+	[[ -n "${LC_ALL+set}" ]] && had_lc=1
+	export LC_ALL=C.UTF-8
 	raw="$(kit_translit "$1" | tr '[:upper:]' '[:lower:]')"
+	if (( had_lc )); then export LC_ALL="$prev_lc"; else unset LC_ALL; fi
 	raw="$(printf '%s' "$raw" | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//; s/_+/_/g')"
 	printf '%s\n' "$raw"
 }
@@ -606,21 +640,43 @@ EOF
 # Шаблоны и генерация пресета
 # ---------------------------------------------------------------------------
 # kit_render_template <src> <dst> [KEY=VALUE ...]
-# Заменяет все вхождения @KEY@ на VALUE буквально (значения экранируются
-# вызывающей стороной через kit_escape_*).
+# Однопроходная замена: строка собирается слева направо, вставленное значение
+# не сканируется повторно (значение с @OTHER_KEY@ остаётся буквальным).
+# Значения экранируются вызывающей стороной через kit_escape_*.
 kit_render_template() {
 	local src="$1" dst="$2"
 	shift 2
 	[[ -f "$src" ]] || kit_die "шаблон не найден: $src"
-	local content pair key value
-	content="$(cat -- "$src")"
+	local content result="" rest="" prefix="" token="" pair key matched
+	local -A values=()
 	for pair in "$@"; do
-		key="${pair%%=*}"
-		value="${pair#*=}"
-		content="${content//@${key}@/$value}"
+		values["${pair%%=*}"]="${pair#*=}"
 	done
+	content="$(cat -- "$src")"
+	while [[ "$content" == *"@"* ]]; do
+		prefix="${content%%@*}"
+		result+="$prefix"
+		rest="${content:${#prefix}}"
+		matched=0
+		for key in "${!values[@]}"; do
+			token="@${key}@"
+			if [[ "$rest" == "$token"* ]]; then
+				result+="${values[$key]}"
+				rest="${rest:${#token}}"
+				matched=1
+				break
+			fi
+		done
+		if (( matched )); then
+			content="$rest"
+		else
+			result+="@"
+			content="${rest:1}"
+		fi
+	done
+	result+="$content"
 	mkdir -p -- "$(dirname -- "$dst")"
-	printf '%s\n' "$content" > "$dst"
+	printf '%s\n' "$result" > "$dst"
 }
 
 kit_permissions_block() {
@@ -774,6 +830,7 @@ kit_patch_exclude_filter() {
 	# Пустая строка exclude_filter="" тоже считается существующей: наличие
 	# ключа проверяется отдельно, иначе появился бы дубликат.
 	has_line="$(awk -v idx="$idx" '
+		{ sub(/\r$/, "") }
 		$0 == "[preset." idx "]" || $0 == "[preset." idx ".options]" { inside=1; next }
 		/^\[/ { inside=0; next }
 		inside && /^exclude_filter=/ { print "yes"; exit }
@@ -781,6 +838,7 @@ kit_patch_exclude_filter() {
 
 	# Фаза 1: заменяем существующую строку exclude_filter выбранного пресета.
 	awk -v idx="$idx" -v value="$escaped" '
+		{ sub(/\r$/, "") }
 		$0 == "[preset." idx "]" || $0 == "[preset." idx ".options]" { inside=1; print; next }
 		/^\[/ { inside=0; print; next }
 		inside && /^exclude_filter=/ { print "exclude_filter=\"" value "\""; next }
@@ -792,6 +850,7 @@ kit_patch_exclude_filter() {
 	if [[ -z "$has_line" ]]; then
 		tmp2="$(mktemp)"
 		awk -v idx="$idx" -v value="$escaped" '
+			{ sub(/\r$/, "") }
 			$0 == "[preset." idx "]" || $0 == "[preset." idx ".options]" { inside=1; print; next }
 			/^\[/ { inside=0; print; next }
 			inside && /^export_filter=/ && !done { print; print "exclude_filter=\"" value "\""; done=1; next }
@@ -1019,11 +1078,11 @@ kit_sdk_image() {
 }
 
 # kit_detect_sdk — определяет способ доступа к сборочному окружению SDK.
-# Заполняет KIT_SDK_MODE (sfdk|sb2|docker|none), KIT_SDK_TARGET, KIT_SDK_RUN,
-# KIT_SDK_IMAGE. Никогда не завершает скрипт.
+# Заполняет KIT_SDK_MODE (docker|none), KIT_SDK_RUN, KIT_SDK_IMAGE.
+# Legacy-режимы sfdk engine/sb2 удалены: в SDK 5.2+ сборка идёт только в
+# Docker-образе aurora-build-tools. Никогда не завершает скрипт.
 kit_detect_sdk() {
 	KIT_SDK_MODE="none"
-	KIT_SDK_TARGET="${X86_64_TARGET:-}"
 	KIT_SDK_VERSION="$(kit_sdk_version)"
 	KIT_SDK_SUPPORTED=1
 	export KIT_SDK_SUPPORTED
@@ -1035,46 +1094,13 @@ kit_detect_sdk() {
 	KIT_SDK_RUN="$(kit_sdk_tools_run)"
 	KIT_SDK_IMAGE="$(kit_sdk_image)"
 
-	local sfdk_bin="" targets="" candidate
-	if [[ -n "${SFDK:-}" ]]; then
-		sfdk_bin="$SFDK"
-	elif [[ -x "$(kit_sdk_home)/bin/sfdk" ]]; then
-		sfdk_bin="$(kit_sdk_home)/bin/sfdk"
-	elif kit_has sfdk; then
-		sfdk_bin="$(command -v sfdk)"
-	fi
-
-	if [[ -n "$sfdk_bin" ]]; then
-		# В SDK 5.2 нет `engine`; старые SDK показывают sb2-таргеты там.
-		targets="$(timeout 15 "$sfdk_bin" engine exec sb2-config -l 2>/dev/null || true)"
-		if grep -qE '^AuroraOS-.*x86_64' <<<"$targets"; then
-			KIT_SDK_MODE="sfdk"
-			if [[ -z "$KIT_SDK_TARGET" ]]; then
-				KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64.*\.default$' <<<"$targets" | head -1 || true)"
-				[[ -n "$KIT_SDK_TARGET" ]] || KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64' <<<"$targets" | head -1 || true)"
-			fi
-			return 0
-		fi
-	fi
-
-	if kit_has sb2-config; then
-		targets="$(sb2-config -l 2>/dev/null || true)"
-		if grep -qE '^AuroraOS-.*x86_64' <<<"$targets"; then
-			KIT_SDK_MODE="sb2"
-			if [[ -z "$KIT_SDK_TARGET" ]]; then
-				KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64.*\.default$' <<<"$targets" | head -1 || true)"
-				[[ -n "$KIT_SDK_TARGET" ]] || KIT_SDK_TARGET="$(grep -E '^AuroraOS-.*x86_64' <<<"$targets" | head -1 || true)"
-			fi
-			return 0
-		fi
-	fi
-
 	if [[ -n "$KIT_SDK_RUN" && -n "$KIT_SDK_IMAGE" ]] && kit_has docker \
 		&& docker image inspect "$KIT_SDK_IMAGE" >/dev/null 2>&1; then
 		KIT_SDK_MODE="docker"
 		return 0
 	fi
 
+	local candidate
 	candidate="$(kit_sdk_version_dir)"
 	if [[ -n "$candidate" ]]; then
 		kit_info "SDK найден в $candidate, но сборочного окружения нет (ожидается Aurora SDK $SDK_DEFAULT_VERSION+)."
@@ -1084,8 +1110,6 @@ kit_detect_sdk() {
 
 kit_sdk_description() {
 	case "${KIT_SDK_MODE:-none}" in
-		sfdk)   printf 'sfdk/sb2 target %s\n' "$KIT_SDK_TARGET" ;;
-		sb2)    printf 'host sb2 target %s\n' "$KIT_SDK_TARGET" ;;
 		docker) printf 'docker image %s via %s\n' "$KIT_SDK_IMAGE" "$KIT_SDK_RUN" ;;
 		*)      printf 'not found\n' ;;
 	esac

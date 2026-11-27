@@ -251,11 +251,66 @@ checksum_for() {
 	awk -v name="$name" '$2 == name || $2 == "*" name { print $1; exit }' "$sums"
 }
 
+# Обязательные ассеты: без них сборка RPM для эмулятора/PCK невозможна.
+# arm64-шаблоны опциональны (устройства может не быть).
+is_required_asset() {
+	[[ "$1" == "$EDITOR_ASSET" || "$1" == "$X64_ASSET" ]]
+}
+
+asset_min_bytes() {
+	if [[ "$1" == "$EDITOR_ASSET" ]]; then
+		printf '%s\n' "$MIN_EDITOR_BYTES"
+	else
+		printf '%s\n' "$MIN_TEMPLATE_BYTES"
+	fi
+}
+
+# asset_known_sha ASSET — SHA-256 из versions.env (пусто = якоря нет).
+asset_known_sha() {
+	case "$1" in
+		"$EDITOR_ASSET") printf '%s\n' "${EDITOR_SHA256:-}" ;;
+		"$X64_ASSET") printf '%s\n' "${X64_TEMPLATE_SHA256:-}" ;;
+		"$ARM64_RELEASE_ASSET") printf '%s\n' "${ARM64_RELEASE_SHA256:-}" ;;
+		"$ARM64_DEBUG_ASSET") printf '%s\n' "${ARM64_DEBUG_SHA256:-}" ;;
+		*) printf '\n' ;;
+	esac
+}
+
+# verify_known_sha FILE ASSET — второй якорь поверх SHA256SUMS.
+# Нет SHA в versions.env — проверка пропускается.
+verify_known_sha() {
+	local path="$1" asset="$2" expected actual
+	(( CHECKSUM )) || return 0
+	expected="$(asset_known_sha "$asset")"
+	[[ -n "$expected" ]] || return 0
+	kit_has sha256sum || { kit_err "sha256sum не найден; установите coreutils."; return 1; }
+	actual="$(sha256sum "$path" | awk '{print $1}')"
+	if [[ "$actual" != "$expected" ]]; then
+		kit_err "известный SHA256 $asset (versions.env) не совпал"
+		kit_err "  ожидалось $expected"
+		kit_err "  получено  $actual"
+		return 1
+	fi
+	kit_info "известный SHA256 ok: $asset"
+	return 0
+}
+
+# verify_staged_asset PART ASSET SUMS — всё проверяется на .part ДО mv.
+verify_staged_asset() {
+	local part="$1" asset="$2" sums="$3"
+	verify_checksum "$part" "$sums" || return 1
+	verify_known_sha "$part" "$asset" || return 1
+	verify_size "$part" "$(asset_min_bytes "$asset")" || return 1
+	return 0
+}
+
 # verify_checksum PATH SUMS — строгая проверка по SHA256SUMS.
+# Путь может быть .part: имя в списке берётся без суффикса.
 verify_checksum() {
 	local path="$1" sums="$2" expected actual name
 	(( CHECKSUM )) || return 0
 	name="$(basename -- "$path")"
+	name="${name%.part}"
 	if [[ -z "$sums" || ! -f "$sums" ]]; then
 		kit_err "SHA256SUMS не найден: ${sums:-<не указан>}"
 		kit_err "Установка без контрольных сумм отключается только флагом --skip-checksum."
@@ -282,7 +337,7 @@ verify_checksum() {
 # Копирование из локального каталога
 # ---------------------------------------------------------------------------
 copy_local_assets() {
-	local asset src sums=""
+	local asset src part sums=""
 	if [[ -f "$SOURCE_DIR/SHA256SUMS" ]]; then
 		sums="$SOURCE_DIR/SHA256SUMS"
 	elif (( CHECKSUM )); then
@@ -294,6 +349,10 @@ copy_local_assets() {
 	for asset in "${ALL_ASSETS[@]}"; do
 		src="$SOURCE_DIR/$asset"
 		if [[ ! -f "$src" ]]; then
+			if is_required_asset "$asset"; then
+				kit_err "в источнике отсутствует обязательный $asset"
+				return 1
+			fi
 			kit_warn "в источнике отсутствует $asset"
 			continue
 		fi
@@ -301,13 +360,15 @@ copy_local_assets() {
 			kit_info "уже установлен: $asset"
 			continue
 		fi
-		cp -f -- "$src" "$DEST/$asset.part"
-		mv -f -- "$DEST/$asset.part" "$DEST/$asset"
-		if ! verify_checksum "$DEST/$asset" "$sums"; then
-			rm -f -- "$DEST/$asset"
-			kit_err "контрольная сумма $asset не совпала; файл не установлен."
+		part="$DEST/$asset.part"
+		cp -f -- "$src" "$part"
+		# Проверки идут по .part: битая копия не заменит рабочий файл.
+		if ! verify_staged_asset "$part" "$asset" "$sums"; then
+			rm -f -- "$part"
+			kit_err "проверка $asset не прошла; файл не установлен."
 			return 1
 		fi
+		mv -f -- "$part" "$DEST/$asset"
 		kit_ok "установлен $asset ($(du -h "$DEST/$asset" | cut -f1))"
 	done
 	return 0
@@ -317,7 +378,7 @@ copy_local_assets() {
 # Загрузка из релиза
 # ---------------------------------------------------------------------------
 download_release_assets() {
-	local asset url sums="" failed=0
+	local asset url part sums="" optional_missing=0
 	if (( CHECKSUM )); then
 		sums="$(mktemp)"
 		if curl -fsSL --connect-timeout 20 --max-time 60 \
@@ -337,19 +398,27 @@ download_release_assets() {
 			kit_info "уже установлен: $asset"
 			continue
 		fi
-		if ! ( kit_download "$url" "$DEST/$asset" ); then
+		part="$DEST/$asset.part"
+		if ! kit_download "$url" "$DEST/$asset"; then
+			rm -f -- "$part"
+			if is_required_asset "$asset"; then
+				kit_err "не удалось скачать обязательный ассет $asset из $RELEASE_BASE"
+				return 1
+			fi
 			kit_warn "не удалось скачать $asset (нет такого ассета в релизе?)"
-			failed=1
+			optional_missing=1
 			continue
 		fi
-		if ! verify_checksum "$DEST/$asset" "$sums"; then
-			rm -f -- "$DEST/$asset"
-			kit_err "контрольная сумма $asset не совпала; файл не установлен."
+		# Проверки идут по .part: битая загрузка не уничтожит рабочий файл.
+		if ! verify_staged_asset "$part" "$asset" "$sums"; then
+			rm -f -- "$part"
+			kit_err "проверка $asset не прошла; файл не установлен."
 			return 1
 		fi
+		mv -f -- "$part" "$DEST/$asset"
 		kit_ok "скачан $asset ($(du -h "$DEST/$asset" | cut -f1))"
 	done
-	(( failed == 0 )) || kit_warn "часть ассетов не скачана; проверьте тег и имена файлов."
+	(( optional_missing == 0 )) || kit_warn "часть необязательных ассетов не скачана; проверьте тег и имена файлов."
 	return 0
 }
 
@@ -372,15 +441,20 @@ if [[ -f "$DEST/$X64_ASSET" ]]; then
 	chmod 0755 "$DEST/$X64_ASSET"
 fi
 
-verify_size "$DEST/$EDITOR_ASSET" "$MIN_EDITOR_BYTES" || true
+verify_size "$DEST/$EDITOR_ASSET" "$MIN_EDITOR_BYTES" \
+	|| kit_die "редактор повреждён или обрезан: $DEST/$EDITOR_ASSET
+Удалите его и повторите fetch_engine.sh."
 
 if [[ -f "$DEST/$X64_ASSET" ]]; then
-	verify_size "$DEST/$X64_ASSET" "$MIN_TEMPLATE_BYTES" || true
+	verify_size "$DEST/$X64_ASSET" "$MIN_TEMPLATE_BYTES" \
+		|| kit_die "шаблон x86_64 повреждён или обрезан: $DEST/$X64_ASSET
+Удалите его и повторите fetch_engine.sh."
 	if kit_has readelf; then
 		kit_verify_no_x11 "$DEST/$X64_ASSET" || kit_warn "x86_64 шаблон линкуется с X11; пересоберите его с auroraos=yes."
 	fi
 else
-	kit_warn "x86_64 шаблон отсутствует: сборка RPM для эмулятора не заработает."
+	kit_die "x86_64 шаблон не установлен: $DEST/$X64_ASSET
+Без него не собрать RPM для эмулятора; повторите fetch_engine.sh."
 fi
 
 # ---------------------------------------------------------------------------

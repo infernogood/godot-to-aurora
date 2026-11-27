@@ -17,7 +17,6 @@
 #   5. иконки, .desktop и RPM .spec;
 #   6. patchelf RPATH на хосте и rpmbuild внутри образа SDK.
 #
-# Старые окружения (sfdk engine / sb2) поддерживаются в режиме совместимости.
 #
 set -euo pipefail
 
@@ -50,8 +49,7 @@ godot-to-aurora — сборка RPM x86_64 или aarch64 для Aurora OS
                            пресет с platform="AuroraOS" (любое имя).
       --pck-only           Экспортировать только PCK и иконки, без RPM.
       --import             Принудительный импорт ресурсов перед экспортом.
-      --no-project-icons   Генерировать иконки в build/, а не в проекте.
-      --no-xkbcommon       Не включать libxkbcommon в пакет.
+      --no-xkbcommon        Не включать libxkbcommon в пакет.
       --skip-checksum      Не проверять SHA-256 xkbcommon/SCons (не рекомендуется).
       --strict-sdk         Блокировать сборку, если SDK не ${SDK_SUPPORTED_PREFIX}x.
       --clean              Удалить предыдущее дерево build/rpmbuild.
@@ -81,8 +79,6 @@ godot-to-aurora — сборка RPM x86_64 или aarch64 для Aurora OS
   AURORA_ARM64_LIB_DIR=DIR        aarch64 libxkbcommon для включения в пакет.
   JOBS=N                          Параллельные задачи.
   BUILD_DIR=DIR                   Каталог сборки (по умолчанию <проект>/build).
-  SFDK=/path/sfdk                 Устаревший путь к CLI SDK.
-  X86_64_TARGET=NAME              Устаревший sb2-таргет.
 
 РЕЗУЛЬТАТ
   <project>/build/<org>.<app>.pck
@@ -107,7 +103,6 @@ WRITE_PRESET_ONLY=0
 FORCE_PRESET=0
 PCK_ONLY=0
 FORCE_IMPORT=0
-PROJECT_ICONS=1
 BUNDLE_XKBCOMMON=1
 SKIP_CHECKSUM=0
 STRICT_SDK=0
@@ -132,7 +127,6 @@ while (( $# > 0 )); do
 		--preset) [[ $# -ge 2 ]] || kit_die "--preset требует имя"; AURORA_PRESET_ARG="$2"; shift ;;
 		--pck-only) PCK_ONLY=1 ;;
 		--import) FORCE_IMPORT=1 ;;
-		--no-project-icons) PROJECT_ICONS=0 ;;
 		--no-xkbcommon) BUNDLE_XKBCOMMON=0 ;;
 		--skip-checksum) SKIP_CHECKSUM=1 ;;
 		--strict-sdk) STRICT_SDK=1 ;;
@@ -195,9 +189,17 @@ else
 	editor_version=""
 fi
 
+# Стоковый Godot не содержит платформы экспорта AuroraOS, а строка --version
+# у форка и стока совпадает, поэтому ищем имя платформы в самом бинарнике.
+editor_has_aurora_platform() {
+	local bin="$1"
+	[[ -f "$bin" ]] || return 1
+	kit_has grep || return 0
+	LC_ALL=C grep -aq 'AuroraOS' "$bin"
+}
+
 kit_detect_sdk
 kit_log "окружение сборки: $(kit_sdk_description)"
-KIT_SFDK="$(kit_find_sfdk)" || KIT_SFDK=""
 
 # --strict-sdk блокирует реальную сборку, но не мешает --check/--write-preset
 # и экспорту одного PCK, которым сборочное окружение SDK не нужно.
@@ -211,12 +213,8 @@ if (( ! PCK_ONLY && ! CHECK_ONLY && ! WRITE_PRESET_ONLY )); then
 	[[ -n "$editor" ]] || kit_die "не найден Godot с экспортёром AuroraOS.
 Установите его: scripts/fetch_engine.sh, либо задайте GODOT_BIN=/path/to/Godot_v${GODOT_AURORA_TAG}_linux.x86_64"
 	if [[ "$KIT_SDK_MODE" == "none" ]]; then
-		kit_die "нет сборочного окружения Aurora SDK (sfdk/sb2 или Docker-образ SDK 5.2).
+		kit_die "нет сборочного окружения Aurora SDK (Docker-образ SDK 5.2+).
 См. docs/SDK_5_2_ARCHITECTURE.md. Для экспорта только PCK используйте --pck-only."
-	fi
-	if [[ "$TARGET_ARCH" == "aarch64" && "$KIT_SDK_MODE" != "docker" ]]; then
-		kit_die "упаковка aarch64 идёт через rpmbuild --target aarch64-meego-linux-gnu
-внутри Docker-образа SDK 5.2. Режим sfdk/sb2 для aarch64 не поддерживается."
 	fi
 fi
 
@@ -246,12 +244,16 @@ if (( CHECK_ONLY )); then
 	printf '  magick/rsvg       %s\n' "$(kit_yes_no kit_has_any magick rsvg-convert)"
 	echo
 	[[ -n "$editor" ]] || { kit_warn "не найден Godot с экспортёром AuroraOS (fetch_engine.sh)."; ready=0; }
+	if [[ -n "$editor" ]] && ! editor_has_aurora_platform "$editor"; then
+		kit_warn "найден стоковый Godot без платформы AuroraOS: $editor — экспорт не заработает."
+		ready=0
+	fi
 	if (( ! KIT_SDK_SUPPORTED )); then
 		if (( STRICT_SDK )); then ready=0; fi
 	fi
 	[[ -z "$PKG_PRESET_INDEX" ]] && kit_info "пресет AuroraOS будет создан во время сборки."
-	[[ -f "$PROJECT_ROOT/icon.svg" || -f "$PROJECT_ROOT/icons/86.png" ]] \
-		|| { kit_warn "в проекте нет icon.svg или icons/86.png."; ready=0; }
+	[[ -f "${ICON_SVG:-$PROJECT_ROOT/icon.svg}" || -f "$BUILD_DIR/icons/86.png" ]] \
+		|| { kit_warn "в проекте нет icon.svg и в build/icons нет готовых PNG."; ready=0; }
 	if (( PCK_ONLY )); then
 		:
 	else
@@ -261,10 +263,6 @@ if (( CHECK_ONLY )); then
 			if [[ "$TARGET_ARCH" == "x86_64" || -n "${AURORA_ARM64_LIB_DIR:-}" ]]; then
 				kit_has patchelf || { kit_warn "для включения libxkbcommon нужен patchelf."; ready=0; }
 			fi
-		fi
-		if [[ "$TARGET_ARCH" == "aarch64" && "$KIT_SDK_MODE" != "docker" ]]; then
-			kit_warn "для упаковки aarch64 нужно Docker-окружение SDK 5.2+."
-			ready=0
 		fi
 	fi
 	echo
@@ -345,6 +343,32 @@ verify_sha256() {
 	kit_info "SHA256 ok: $label"
 }
 
+# download_xkbcommon_archive DEST URL... — официальный релизный архив xkbcommon
+# с зеркалом; SHA-256 проверяется по .part, целевой файл появляется только
+# после успешной проверки.
+download_xkbcommon_archive() {
+	local dest="$1"
+	shift
+	local url label
+	label="xkbcommon-$(basename -- "$dest")"
+	for url in "$@"; do
+		if ! kit_download "$url" "$dest"; then
+			kit_warn "источник недоступен: $url"
+			continue
+		fi
+		if (( SKIP_CHECKSUM )); then
+			kit_warn "SHA-256 xkbcommon пропущена (--skip-checksum)."
+		elif ! verify_sha256 "$dest.part" "$XKBCOMMON_SHA256" "$label"; then
+			rm -f -- "$dest.part"
+			kit_err "архив xkbcommon не прошёл проверку SHA256."
+			return 1
+		fi
+		kit_commit_download "$dest"
+		return 0
+	done
+	return 1
+}
+
 # Версия libxkbcommon в образе (заголовки фиксированы, .pc подгоняется под ABI).
 detect_xkbcommon_version() {
 	local image="$1" version=""
@@ -374,24 +398,30 @@ detect_xkbcommon_lib() {
 
 prepare_extra() {
 	local extra="$1" tmp src_archive wheel pc_version archive_version
+	local -a archive_urls
+	local archive_top
 	mkdir -p "$extra/include" "$extra/pkgconfig" "$extra/lib" "$extra/scons"
 
 	if [[ ! -f "$extra/include/xkbcommon/xkbcommon.h" ]]; then
 		archive_version="$(kit_xkbcommon_base_version "$XKBCOMMON_VERSION")"
 		kit_log "подготавливаю заголовки xkbcommon $archive_version (в образе нет -devel)…"
 		tmp="$(mktemp -d)"
-		src_archive="$tmp/xkbcommon.tar.gz"
-		kit_download \
-			"https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-${archive_version}.tar.gz" \
-			"$src_archive"
-		if (( SKIP_CHECKSUM )); then
-			kit_warn "SHA-256 xkbcommon пропущена (--skip-checksum)."
-		else
-			verify_sha256 "$src_archive" "$XKBCOMMON_SHA256" "xkbcommon-$archive_version.tar.gz" \
-				|| kit_die "архив xkbcommon не прошёл проверку SHA256."
+		src_archive="$tmp/xkbcommon-$archive_version.tar.xz"
+		archive_urls=(
+			"https://xkbcommon.org/download/libxkbcommon-${archive_version}.tar.xz"
+			"https://distfiles.gentoo.org/distfiles/libxkbcommon-${archive_version}.tar.xz"
+		)
+		archive_top="libxkbcommon-${archive_version}"
+		download_xkbcommon_archive "$src_archive" "${archive_urls[@]}" \
+			|| kit_die "не удалось скачать архив xkbcommon $archive_version."
+		tar -xJf "$src_archive" -C "$tmp" \
+			|| kit_die "не удалось распаковать $src_archive (нужен xz)."
+		cp -r "$tmp/$archive_top/include/xkbcommon" "$extra/include/" \
+			|| kit_die "в архиве xkbcommon нет $archive_top/include/xkbcommon."
+		# Текст лицензии кэшируется рядом с extra/: он нужен для %license в RPM.
+		if [[ -f "$tmp/$archive_top/LICENSE" ]]; then
+			install -m 0644 "$tmp/$archive_top/LICENSE" "$extra/LICENSE.libxkbcommon"
 		fi
-		tar xzf "$src_archive" -C "$tmp"
-		cp -r "$tmp/libxkbcommon-xkbcommon-${archive_version}/include/xkbcommon" "$extra/include/"
 		rm -rf -- "$tmp"
 	fi
 
@@ -452,12 +482,23 @@ PY
 build_template_docker() {
 	local src="$AURORA_WORKSPACE/godot-$GODOT_AURORA_TAG"
 	local extra="${AURORA_EXTRA_DIR:-$AURORA_WORKSPACE/extra}"
-	local out
+	local out head_rev
 	mkdir -p "$AURORA_WORKSPACE"
 	if [[ ! -d "$src/.git" ]]; then
 		kit_has git || kit_die "для загрузки исходников Godot нужен git."
 		kit_log "клонирую $KIT_GODOT_REPO ($GODOT_AURORA_TAG) в $src"
 		git clone --depth 1 --branch "$GODOT_AURORA_TAG" "$KIT_GODOT_REPO" "$src"
+	fi
+
+	# Тег мог быть перевешен: исходники должны указывать ровно на GODOT_AURORA_SHA.
+	if [[ -n "${GODOT_AURORA_SHA:-}" ]]; then
+		kit_has git || kit_die "для проверки коммита Godot нужен git."
+		head_rev="$(git -C "$src" rev-parse HEAD 2>/dev/null || true)"
+		if [[ "$head_rev" != "$GODOT_AURORA_SHA" ]]; then
+			kit_die "исходники в $src указывают на ${head_rev:-неизвестный коммит},
+а тег $GODOT_AURORA_TAG по versions.env — это $GODOT_AURORA_SHA.
+Удалите каталог и повторите сборку: rm -rf '$src'"
+		fi
 	fi
 
 	XKBCOMMON_DETECTED_VERSION="$(detect_xkbcommon_version "$KIT_SDK_IMAGE")"
@@ -538,28 +579,6 @@ build_template_docker() {
 	AURORA_BUILD_CONTAINER=""
 }
 
-build_template_sb2() {
-	local src="$AURORA_WORKSPACE/godot-$GODOT_AURORA_TAG" cmd
-	kit_has git || kit_die "для загрузки исходников Godot нужен git."
-	mkdir -p "$AURORA_WORKSPACE"
-	if [[ ! -d "$src/.git" ]]; then
-		kit_log "клонирую $KIT_GODOT_REPO ($GODOT_AURORA_TAG) в $src"
-		git clone --depth 1 --branch "$GODOT_AURORA_TAG" "$KIT_GODOT_REPO" "$src"
-	fi
-	# В sb2-таргете нет гарантии наличия scons; подходит и `scons`, и `python3 -m SCons`.
-	cmd="cd \"$src\" && if command -v scons >/dev/null 2>&1; then scons ${KIT_SCONS_ARGS[*]} -j$JOBS; else python3 -m SCons ${KIT_SCONS_ARGS[*]} -j$JOBS; fi"
-	kit_log "компилирую шаблон x86_64 в таргете $KIT_SDK_TARGET (-j$JOBS)…"
-	if [[ "$KIT_SDK_MODE" == "sfdk" ]]; then
-		"$KIT_SFDK" engine exec sb2 -t "$KIT_SDK_TARGET" bash -lc "$cmd"
-	else
-		sb2 -t "$KIT_SDK_TARGET" bash -lc "$cmd"
-	fi
-	[[ -f "$src/bin/godot.linuxbsd.template_release.x86_64" ]] \
-		|| kit_die "scons завершился, но шаблон не собран"
-	mkdir -p "$(dirname -- "$TEMPLATE_DEST")"
-	install -m 0755 "$src/bin/godot.linuxbsd.template_release.x86_64" "$TEMPLATE_DEST"
-}
-
 build_template() {
 	if [[ "$TARGET_ARCH" != "x86_64" ]]; then
 		kit_die "шаблон $TARGET_ARCH нельзя собрать на x86_64-хосте внутри образа SDK.
@@ -567,11 +586,6 @@ build_template() {
 	fi
 	case "$KIT_SDK_MODE" in
 		docker) build_template_docker ;;
-		sfdk)
-			KIT_SFDK="$(kit_find_sfdk)" || kit_die "sfdk не найден"
-			build_template_sb2
-			;;
-		sb2) build_template_sb2 ;;
 		*)
 			kit_die "нет сборочного окружения Aurora SDK; собрать шаблон x86_64 нельзя.
 
@@ -610,9 +624,9 @@ fi
 # ---------------------------------------------------------------------------
 # Иконки
 # ---------------------------------------------------------------------------
+# Иконки всегда генерируются в BUILD_DIR: дерево игры не должно засоряться.
 ICON_SRC="${ICON_SVG:-$PROJECT_ROOT/icon.svg}"
-ICON_STAGE="$PROJECT_ROOT/icons"
-(( PROJECT_ICONS )) || ICON_STAGE="$BUILD_DIR/icons"
+ICON_STAGE="$BUILD_DIR/icons"
 
 render_icon() { # render_icon <размер> <файл>
 	local size="$1" out="$2" rc=0
@@ -784,6 +798,59 @@ if (( BUNDLE_XKBCOMMON )); then
 fi
 
 # ---------------------------------------------------------------------------
+# Лицензии в пакете (%license)
+# ---------------------------------------------------------------------------
+# xkbcommon_license_file — текст лицензии библиотеки. Берётся из extra/ после
+# сборки шаблона либо из проверенного архива xkbcommon (кэш в BUILD_DIR).
+xkbcommon_license_file() {
+	local extra="${AURORA_EXTRA_DIR:-$AURORA_WORKSPACE/extra}"
+	local base cached tmp archive
+	base="$(kit_xkbcommon_base_version "$XKBCOMMON_VERSION")"
+	cached="$BUILD_DIR/.licenses/libxkbcommon-${base}.LICENSE"
+	if [[ -f "$extra/LICENSE.libxkbcommon" ]]; then
+		printf '%s\n' "$extra/LICENSE.libxkbcommon"
+		return 0
+	fi
+	if [[ -f "$cached" ]]; then
+		printf '%s\n' "$cached"
+		return 0
+	fi
+	kit_has tar || return 1
+	tmp="$(mktemp -d)" || return 1
+	archive="$tmp/xkbcommon-$base.tar.xz"
+	if ! download_xkbcommon_archive "$archive" \
+		"https://xkbcommon.org/download/libxkbcommon-${base}.tar.xz" \
+		"https://distfiles.gentoo.org/distfiles/libxkbcommon-${base}.tar.xz"; then
+		rm -rf -- "$tmp"
+		return 1
+	fi
+	if ! tar -xJf "$archive" -C "$tmp" "libxkbcommon-${base}/LICENSE"; then
+		rm -rf -- "$tmp"
+		return 1
+	fi
+	mkdir -p "$BUILD_DIR/.licenses"
+	install -m 0644 "$tmp/libxkbcommon-${base}/LICENSE" "$cached"
+	rm -rf -- "$tmp"
+	printf '%s\n' "$cached"
+}
+
+LICENSE_DIR="$RPMBUILD/files/usr/share/licenses/$PKG_FULL"
+mkdir -p "$LICENSE_DIR"
+# MIT-уведомления Godot и AuroraOS-форка обязательны для любого пакета кита.
+kit_render_template "$KIT_ROOT/THIRD_PARTY_NOTICES.md" "$LICENSE_DIR/LICENSE.Godot" \
+	|| kit_die "не удалось подготовить LICENSE.Godot из THIRD_PARTY_NOTICES.md"
+spec_license_files='%license %{_licensedir}/%{name}/LICENSE.Godot'
+if compgen -G "$RPMBUILD/files/usr/share/$PKG_FULL/lib/libxkbcommon.so.0*" >/dev/null; then
+	xkb_license="$(xkbcommon_license_file)" || xkb_license=""
+	if [[ -n "$xkb_license" ]]; then
+		install -m 0644 "$xkb_license" "$LICENSE_DIR/LICENSE.libxkbcommon"
+		spec_license_files+=$'\n%license %{_licensedir}/%{name}/LICENSE.libxkbcommon'
+	else
+		kit_warn "текст лицензии libxkbcommon не найден; %license этого файла пропущен."
+	fi
+fi
+
+# ---------------------------------------------------------------------------
 # .desktop и .spec
 # ---------------------------------------------------------------------------
 desktop_path="$RPMBUILD/files/usr/share/applications/$PKG_FULL.desktop"
@@ -805,6 +872,12 @@ spec_description="${APP_DESCRIPTION:-$PKG_COMMENT}"
 [[ -n "$spec_description" ]] || spec_description="$PKG_TITLE — игра Godot для Aurora OS."
 spec_description="$(kit_escape_spec "$spec_description")"
 changelog_date="$(LC_ALL=C date '+%a %b %d %Y')"
+# libxkbcommon упаковывается только в x86_64-пакет: там её надо исключить
+# из автозависимостей. Для aarch64 строки нет вовсе.
+spec_requires_exclude=""
+if [[ "$TARGET_ARCH" == "x86_64" ]]; then
+	spec_requires_exclude='%define __requires_exclude ^libxkbcommon.*$'
+fi
 kit_render_template "$KIT_TEMPLATES/app.spec.in" "$SPEC_PATH" \
 	"PKG_NAME=$(kit_escape_spec "$PKG_FULL")" \
 	"SUMMARY=$spec_summary" \
@@ -812,7 +885,9 @@ kit_render_template "$KIT_TEMPLATES/app.spec.in" "$SPEC_PATH" \
 	"RELEASE=$(kit_escape_spec "$PKG_RELEASE")" \
 	"LICENSE=$(kit_escape_spec "$PKG_LICENSE")" \
 	"DESCRIPTION=$spec_description" \
-	"CHANGELOG_DATE=$changelog_date"
+	"CHANGELOG_DATE=$changelog_date" \
+	"REQUIRES_EXCLUDE=$spec_requires_exclude" \
+	"LICENSE_FILES=$spec_license_files"
 kit_log "spec: $SPEC_PATH"
 
 kit_info "payload: $(find "$RPMBUILD/files" -type f | wc -l) файлов, $(du -sh "$RPMBUILD/files" | cut -f1)"
@@ -827,15 +902,6 @@ mkdir -p "$RPMBUILD/RPMS"
 
 rpm_path=""
 case "$KIT_SDK_MODE" in
-	sfdk|sb2)
-		kit_log "запускаю rpmbuild в таргете $KIT_SDK_TARGET"
-		if [[ "$KIT_SDK_MODE" == "sfdk" ]]; then
-			"$KIT_SFDK" engine exec sb2 -t "$KIT_SDK_TARGET" rpmbuild \
-				--define "_topdir $RPMBUILD" -bb "$SPEC_PATH"
-		else
-			sb2 -t "$KIT_SDK_TARGET" rpmbuild --define "_topdir $RPMBUILD" -bb "$SPEC_PATH"
-		fi
-		;;
 	docker)
 		[[ -n "$KIT_SDK_RUN" ]] || kit_die "SDK tools/run не найден; задайте AURORA_SDK_HOME."
 		if ! kit_path_inside "$BUILD_DIR" "$PROJECT_ROOT"; then

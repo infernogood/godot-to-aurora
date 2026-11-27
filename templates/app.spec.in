@@ -1,7 +1,8 @@
 # RPM spec template for a Godot game packaged for Aurora OS.
 #
 # Rendered by scripts/build_x86_64_rpm.sh. Substituted keys:
-#   PKG_NAME, SUMMARY, VERSION, RELEASE, LICENSE, DESCRIPTION, CHANGELOG_DATE.
+#   PKG_NAME, SUMMARY, VERSION, RELEASE, LICENSE, DESCRIPTION, CHANGELOG_DATE,
+#   REQUIRES_EXCLUDE, LICENSE_FILES.
 #
 # The binary is patched with patchelf on the HOST before rpmbuild, so this spec
 # intentionally has no BuildRequires: patchelf and no install-time scripts that
@@ -19,8 +20,8 @@ Version:        @VERSION@
 Release:        @RELEASE@
 License:        @LICENSE@
 
-%define __requires_exclude ^libxkbcommon.*$
 %define __provides_exclude_from ^%{_datadir}/%{name}/lib/.*\.so.*$
+@REQUIRES_EXCLUDE@
 %define debug_package %{nil}
 
 %description
@@ -35,6 +36,7 @@ cp -a %{_topdir}/files/. %{buildroot}/
 %{_datadir}/%{name}
 %{_datadir}/applications/%{name}.desktop
 %{_datadir}/icons/hicolor/*/apps/%{name}.png
+@LICENSE_FILES@
 
 %changelog
 * @CHANGELOG_DATE@ godot-to-aurora <noreply@example.invalid> - @VERSION@-@RELEASE@
