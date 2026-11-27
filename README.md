@@ -348,43 +348,6 @@ build/backups/export_presets.cfg.bak.<timestamp>     # если пресет с�
 
 ---
 
-## Модули
-
-### `modules/safe_area_helper.gd`
-
-Чистый статический хелпер. Возвращает `{"l","t","r","b","valid"}`, игнорируя нулевую
-safe area и оконный режим на ПК, масштабирует отступы в координаты вьюпорта и считает
-`ui_scale` через `minf` с ограничением `0.85…1.5`. Минимальный размер касания — 48 dp с
-поправкой на DPI экрана.
-
-```gdscript
-var vp := get_viewport().get_visible_rect().size
-var insets := AuroraSafeArea.insets(vp)
-var ui_scale := AuroraSafeArea.ui_scale(vp)
-panel.offset_left = float(insets["l"]) + 24.0 * ui_scale
-button.custom_minimum_size = Vector2.ONE * AuroraSafeArea.touch_target(ui_scale)
-```
-
-### `modules/aurora_lifecycle.gd`
-
-Автозагрузка `AuroraLifecycle`: фиксирует ориентацию, по сворачиванию ставит дерево на
-паузу, включает энергосбережение (`OS.low_processor_usage_mode`, `Engine.max_fps`),
-мьютит `Master`, эмитит `autosave_requested`. Потеря фокуса окна на десктопе ставит игру
-на паузу только при `pause_on_desktop_focus_loss = true`; не размораживает игру сама —
-это делает `resume_game()` из кнопки «Продолжить».
-
-### `modules/save_service.gd`
-
-Автозагрузка `SaveService`: атомарная запись JSON в `user://` (`tmp` + `rename`, без
-предварительного удаления цели), восстановление из `.tmp` при повреждённом файле,
-версия формата и хук миграции (`expected_version` + `Callable`), транслитерация и
-хэш-суффикс имён слотов, `save/load_slot/has_slot/erase_slot/list_slots/clear_all`.
-Совместим с `--headless --script` тестами.
-
-Подключение — см. «Быстрый старт», шаг 2.
-
----
-
 ## Сборка для реального устройства (aarch64)
 
 Штатный экспортёр Авроры в форке Godot вызывает `sfdk engine exec sb2`, а в SDK 5.2
