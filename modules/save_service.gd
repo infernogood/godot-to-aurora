@@ -25,9 +25,15 @@ extends Node
 ##     `DirAccess.rename_absolute()`. On POSIX `rename()` replaces the target
 ##     atomically, so a reader never sees a half-written file. If the rename
 ##     fails the write is reported as failed — there is deliberately no
-##     non-atomic fallback;
-##   * `load_slot()` restores a slot from a leftover `.json.tmp` when the main
-##     file is missing or corrupted, using the same atomic rename;
+##     non-atomic fallback. Note that `FileAccess.flush()` flushes the userspace
+##     buffer into the kernel only: it is NOT an `fsync()`, so after a power
+##     loss the rename may survive while the new content does not. A save is
+##     crash-safe (process killed), not power-loss-safe;
+##   * `load_slot()` restores a slot from a leftover `.json.tmp` only when the
+##     main file is missing or corrupted: an existing valid main file always
+##     wins, so a stale `.tmp` from a failed write can never roll the slot back;
+##   * `has_slot()` counts a slot as present when the main file OR its `.json.tmp`
+##     exists (a cheap existence check, the JSON is not parsed);
 ##   * the JSON envelope is versioned, so a format change can migrate old saves
 ##     instead of silently misreading them.
 ##
@@ -66,6 +72,9 @@ const _TRANSLIT := {
 ## Directory for all slots. Must stay under `user://` for Aurora OS.
 @export var save_dir: String = DEFAULT_SAVE_DIR
 ## Envelope version; bump when the payload schema changes incompatibly.
+## `load_slot()` uses it as the default expected version, so a slot written with
+## a bumped `format_version` (inspector value included) reads back without
+## passing an explicit argument.
 @export var format_version: int = FORMAT_VERSION
 
 var last_error: String = ""
@@ -88,19 +97,28 @@ func save(slot: String, data: Dictionary) -> bool:
 ## invalid or of an unmigrated version. Inspect `last_error` to distinguish
 ## the cases.
 ##
+## `expected_version` defaults to the exported `format_version` property (the
+## sentinel `-1` means "use `format_version`"), so changing `format_version` in
+## the inspector does not break reading existing saves.
+##
 ## When the version stored in the file differs from `expected_version` and a
 ## valid `migrate` callable is given, `migrate.call(saved_version, raw_data)` is
 ## invoked. If it returns a Dictionary, that value is written back as
 ## `expected_version` and returned; otherwise the load fails like before.
 func load_slot(
 	slot: String = "default",
-	expected_version: int = FORMAT_VERSION,
+	expected_version: int = -1,
 	migrate: Callable = Callable(),
 ) -> Dictionary:
 	last_error = ""
+	var wanted := expected_version
+	if wanted < 0:
+		wanted = format_version
 	var normalized := normalize_slot(slot)
 	var path := _slot_file(normalized)
 	var envelope: Variant = null
+	# A valid main file always wins: the `.tmp` is only a recovery source when
+	# the main file is missing or unparsable, never a silent rollback target.
 	if FileAccess.file_exists(path):
 		envelope = _parse_file(path)
 		if envelope == null:
@@ -109,11 +127,14 @@ func load_slot(
 		envelope = _restore_from_tmp(path, normalized)
 	if not (envelope is Dictionary):
 		return {}
-	return _unwrap(envelope as Dictionary, normalized, expected_version, migrate)
+	return _unwrap(envelope as Dictionary, normalized, wanted, migrate)
 
 
+## True when the slot exists as the main file or as a leftover `.json.tmp` that
+## `load_slot()` can still recover. Existence only — the JSON is not parsed.
 func has_slot(slot: String) -> bool:
-	return FileAccess.file_exists(_slot_file(normalize_slot(slot)))
+	var path := _slot_file(normalize_slot(slot))
+	return FileAccess.file_exists(path) or FileAccess.file_exists(path + ".tmp")
 
 
 ## Removes one slot. Returns true if a file was removed (or nothing existed).
@@ -260,6 +281,8 @@ func _write_json(path: String, envelope: Dictionary) -> bool:
 		last_error = "cannot write %s (error %d)" % [tmp_path, FileAccess.get_open_error()]
 		return false
 	file.store_string(JSON.stringify(envelope, "\t"))
+	# `flush()` only pushes the userspace buffer to the kernel: it is not an
+	# `fsync()`, so a power loss may keep the rename and lose the new content.
 	file.flush()
 	var write_error := file.get_error()
 	file.close()

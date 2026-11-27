@@ -26,10 +26,15 @@ extends Node
 ##     listeners can read the live game state synchronously.
 ##
 ## Behaviour:
-##   * `APPLICATION_PAUSED` / `APPLICATION_FOCUS_OUT` always suspend the game;
-##   * desktop `WM_WINDOW_FOCUS_OUT` suspends only when
-##     `pause_on_desktop_focus_loss` is `true` — clicking a second monitor or a
-##     system popup does not pause a desktop build by default;
+##   * `APPLICATION_PAUSED` always suspends the game;
+##   * on mobile builds (Aurora OS, Android, iOS) `APPLICATION_FOCUS_OUT` always
+##     suspends the game: there the application loses focus only when it goes to
+##     the background;
+##   * on desktop both `APPLICATION_FOCUS_OUT` and `WM_WINDOW_FOCUS_OUT` suspend
+##     only when `pause_on_desktop_focus_loss` is `true` — clicking a second
+##     monitor or a system popup does not pause a desktop build by default. The
+##     `focus_changed(false)` signal is emitted either way, so the game can react
+##     to the focus change without freezing the tree;
 ##   * a `WM_WINDOW_FOCUS_OUT` that arrives before the first `FOCUS_IN` is
 ##     ignored, otherwise a game started in the background (or under
 ##     `--headless --script`) pauses itself immediately;
@@ -60,8 +65,9 @@ const SUSPENDED_MAX_FPS := 10
 @export var apply_orientation := true
 ## Emit `autosave_requested` on suspend and on close requests.
 @export var request_autosave := true
-## Pause on desktop window focus loss. Mobile builds pause on
-## `APPLICATION_PAUSED` anyway; on desktop this is usually unwanted.
+## Pause on focus loss in a desktop build (`WM_WINDOW_FOCUS_OUT` and
+## `APPLICATION_FOCUS_OUT`). Mobile builds pause on `APPLICATION_PAUSED` and
+## `APPLICATION_FOCUS_OUT` anyway; on desktop this is usually unwanted.
 @export var pause_on_desktop_focus_loss := false
 ## Throttle the process while suspended (`OS.low_processor_usage_mode` and
 ## `Engine.max_fps`), restoring the previous values on resume.
@@ -100,7 +106,10 @@ func _notification(what: int) -> void:
 			_seen_focus = true
 			_handle_focus_in()
 		NOTIFICATION_APPLICATION_FOCUS_OUT:
-			_handle_focus_out(true, "focus_out")
+			# Mobile builds are backgrounded on focus loss, so they always pause;
+			# on desktop the same notification fires when another window grabs
+			# the focus, so `pause_on_desktop_focus_loss` decides.
+			_handle_focus_out(is_mobile_platform() or pause_on_desktop_focus_loss, "focus_out")
 		NOTIFICATION_APPLICATION_PAUSED:
 			suspend("app_paused")
 		NOTIFICATION_WM_CLOSE_REQUEST:
@@ -136,6 +145,12 @@ func resume_game() -> void:
 ## Current orientation value (DisplayServer.ScreenOrientation as int).
 func get_orientation() -> int:
 	return _orientation
+
+
+## True on mobile-like platforms (Aurora OS, Android, iOS), where losing the
+## application focus means the app is going to the background.
+static func is_mobile_platform() -> bool:
+	return OS.has_feature("mobile") or OS.has_feature("auroraos")
 
 
 ## Re-applies the configured orientation at runtime (emulator rotations, tests).
