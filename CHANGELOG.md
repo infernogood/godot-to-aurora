@@ -7,6 +7,51 @@
 Версия кита хранится в [`versions.env`](versions.env) (`KIT_VERSION`) и печатается
 любым скриптом по флагу `--version`.
 
+## [1.1.1] — 2026-11-27
+
+Исправления по итогам code review: предсказуемый деплой и выбор RPM, устойчивые парсеры и
+шаблоны, проверка целостности загрузок, доработка модулей, тестов и документации.
+
+### Fixed
+
+- `deploy_emulator.sh`: ключ SSH по умолчанию — `<SDK>/vmshare/ssh/private_keys/sdk`
+  (`AURORA_SSH_KEY` переопределяет) и его путь выводится в `--check`; успех установки
+  подтверждается сверкой `%{VERSION}-%{RELEASE}` с метаданными собранного RPM; последний
+  RPM выбирается через `sort -V`; при автоподборе устройства не подхватывается реальный
+  телефон; создаётся удалённый `~/Downloads`; аргументы `gdbus` передаются без склейки
+  кавычек (`<true>` больше не выглядит редиректом).
+- `common.sh`: `LC_ALL=C.UTF-8` внутри `kit_translit`/`kit_slug` — кириллица не обнуляется
+  под `LC_ALL=C`; все `awk`-парсеры снимают хвостовой `\r` (CRLF); `kit_render_template`
+  заменяет ключи за один проход; `kit_escape_desktop` экранирует `\`; из
+  `kit_detect_sdk` удалены legacy-ветки `sfdk engine`/`sb2` (режимы `docker|none`).
+- `fetch_engine.sh`: SHA-256 проверяется на `.part` **до** `mv` (битый архив не уничтожает
+  рабочий бинарник даже с `--force`); ошибки загрузки шаблонов и проверки размеров больше
+  не глушатся через `|| true`; в `versions.env` закреплены SHA коммита форка
+  (`GODOT_AURORA_SHA`) и SHA-256 релизных бинарников; `libxkbcommon` качается официальным
+  архивом с [xkbcommon.org](https://xkbcommon.org/) вместо `archive/refs/tags/`.
+- `--check` считает окружение неготовым, если найден только стоковый Godot без платформы
+  `AuroraOS`.
+- `templates/app.spec.in`: устанавливается `%license`, а
+  `%define __requires_exclude ^libxkbcommon.*$` применяется только когда библиотека
+  реально упакована (`x86_64`), не для `aarch64`.
+- PNG-иконки генерируются в `$BUILD_DIR/icons/` и больше не мусорят в дереве игры; флаг
+  `--no-project-icons` удалён (прежнее поведение стало единственным).
+- Модули: `APPLICATION_FOCUS_OUT` обрабатывается только на десктопе; `load_slot()`
+  учитывает `format_version`; `has_slot()` видит файл `.tmp`; `touch_target` не
+  масштабируется дважды; `looks_windowed` не отбрасывает валидную safe area; `ui_scale`
+  берёт базу из `ProjectSettings`.
+- CI: закреплены версии GitHub Actions и SHA движка Godot; тесты обновлены под новое
+  поведение флагов, иконок и `kit_detect_sdk`.
+
+### Changed
+
+- `README.md` сокращён: инварианты и устройство SDK вынесены в ссылки на `AGENTS.md` и
+  `docs/SDK_5_2_ARCHITECTURE.md`; добавлены `rpm`, `ssh`/`scp`, `unzip`, `timeout`,
+  `realpath`, описаны `AURORA_SSH_KEY` и линейный ручной сценарий запуска.
+- `docs/SDK_5_2_ARCHITECTURE.md`: `sb2`/`sfdk engine` упоминаются только как историческая
+  справка, имя образа — `aurora-build-tools-<user>:5.2.1.200`, режимы `kit_detect_sdk` —
+  `docker|none`.
+
 ## [1.1.0] — 2026-11-26
 
 Релиз закрывает замечания code review: безопасность и предсказуемость скриптов,

@@ -29,6 +29,13 @@ if [[ -z "$KIT_VERSION" ]]; then
 fi
 EXPECTED_VERSION="godot-to-aurora $KIT_VERSION"
 
+# Тег Aurora-сборки Godot: из него складываются имена ассетов fetch_engine.sh.
+GODOT_TAG="$(sed -n 's/^GODOT_AURORA_TAG=//p' "$VERSIONS_FILE" | head -1)"
+if [[ -z "$GODOT_TAG" ]]; then
+	printf 'не удалось прочитать GODOT_AURORA_TAG из %s\n' "$VERSIONS_FILE" >&2
+	exit 1
+fi
+
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/godot-to-aurora-cli.XXXXXX")"
 cleanup() {
 	rm -rf -- "$TMP_ROOT"
@@ -129,6 +136,56 @@ config_version=5
 config/name="Smoke Game"
 config/version="1.0.0"
 EOF
+}
+
+# Моки sfdk/rpm/scp для deploy_emulator.sh: устройство-эмулятор, метаданные
+# тестового пакета и «установленная» версия из $MOCK_INSTALLED_VERSION.
+write_deploy_mocks() { # write_deploy_mocks <каталог для исполняемых файлов>
+	local bindir="$1"
+	mkdir -p "$bindir"
+
+	cat > "$bindir/sfdk" <<'MOCK_SFDK'
+#!/usr/bin/env bash
+# Мок sfdk: одно устройство-эмулятор и запрос версии пакета на устройстве.
+case "$*" in
+	*"device list"*)
+		printf '#0  "AuroraEmulator"\n'
+		printf '    Type: эмулятор\n'
+		printf '    Host name: defaultuser@127.0.0.1:2223\n'
+		;;
+	*"emulator list"*) printf 'AuroraEmulator\n' ;;
+	*"device exec"*)
+		case "$*" in
+			*"rpm -q"*) printf '%s\n' "${MOCK_INSTALLED_VERSION:-1.2.3-1}" ;;
+		esac
+		;;
+esac
+exit 0
+MOCK_SFDK
+
+	cat > "$bindir/rpm" <<'MOCK_RPM'
+#!/usr/bin/env bash
+# Мок rpm: печатает метаданные тестового пакета по --queryformat.
+format=""
+previous=""
+for arg in "$@"; do
+	if [[ "$previous" == "--queryformat" ]]; then format="$arg"; fi
+	previous="$arg"
+done
+case "$format" in
+	*NAME*) printf '%s' "${MOCK_RPM_NAME:-ru.test.smoke}" ;;
+	*ARCH*) printf '%s' "${MOCK_RPM_ARCH:-x86_64}" ;;
+	*VERSION*) printf '%s' "${MOCK_RPM_VERSION:-1.2.3-1}" ;;
+esac
+MOCK_RPM
+
+	cat > "$bindir/scp" <<'MOCK_SCP'
+#!/usr/bin/env bash
+# Мок scp: копирование на «устройство» всегда успешно.
+exit 0
+MOCK_SCP
+
+	chmod +x "$bindir/sfdk" "$bindir/rpm" "$bindir/scp"
 }
 
 make_fake_elf() { # make_fake_elf <путь> aarch64|x86_64
@@ -380,6 +437,20 @@ test_escaping() {
 
 	out="$(kit_helper "$TMP_ROOT/escape" kit_escape_desktop "$(printf 'a\nb\tc')")"
 	check_eq "kit_escape_desktop: без управляющих символов" "abc" "$out"
+
+	# Обратный слэш в .desktop-значении не должен ломать строку: он удваивается.
+	out="$(kit_helper "$TMP_ROOT/escape" kit_escape_desktop 'a\b')"
+	check_eq "kit_escape_desktop: обратный слэш экранирован" 'a\\b' "$out"
+
+	local escaped out_desktop="$TMP_ROOT/escape/app.desktop"
+	escaped="$(kit_helper "$TMP_ROOT/escape" kit_escape_desktop 'Back\slash')"
+	kit_helper "$TMP_ROOT/escape" kit_render_template \
+		"$REPO_ROOT/templates/app.desktop.in" "$out_desktop" \
+		"APP_TITLE=$escaped" >/dev/null
+	check_eq "desktop: Name с обратным слэшем сохранён" "1" \
+		"$(count_exact_lines "$out_desktop" 'Name=Back\\slash')"
+	check_eq "desktop: строка Name не разорвана" "1" \
+		"$(count_matches "$out_desktop" '^Name=')"
 }
 
 test_title_roundtrip() {
@@ -579,6 +650,205 @@ test_aarch64_wrapper() {
 }
 
 # ---------------------------------------------------------------------------
+# 13. Транслитерация кириллицы при LC_ALL=C.
+# ---------------------------------------------------------------------------
+test_slug_under_c_locale() {
+	printf '\n[13] Транслитерация под LC_ALL=C\n'
+	local out
+	local probe="$TMP_ROOT/slug-probe.sh"
+	cat > "$probe" <<'EOF'
+#!/usr/bin/env bash
+source "$1"
+kit_slug "$2"
+EOF
+	# kit_translit/kit_slug сами выставляют C.UTF-8: под LC_ALL=C bash не меняет
+	# регистр кириллицы, и ассерты ниже проверяют именно это.
+	out="$(env -i "PATH=$PATH" "HOME=$TMP_ROOT/slug-home" "LC_ALL=C" \
+		bash "$probe" "$COMMON_LIB" "Моя Игра")"
+	check_eq "kit_slug «Моя Игра» под LC_ALL=C" "moya_igra" "$out"
+
+	out="$(env -i "PATH=$PATH" "HOME=$TMP_ROOT/slug-home" "LC_ALL=C" \
+		bash "$probe" "$COMMON_LIB" "Привет МИР")"
+	check_eq "kit_slug с верхним регистром под LC_ALL=C" "privet_mir" "$out"
+}
+
+# ---------------------------------------------------------------------------
+# 14. export_presets.cfg с CRLF: пресет находится, файл не мусорится.
+# ---------------------------------------------------------------------------
+test_crlf_preset() {
+	printf '\n[14] export_presets.cfg с CRLF\n'
+	local proj="$TMP_ROOT/crlf-project"
+	new_project "$proj"
+	local preset="$proj/export_presets.cfg"
+	# Так файл пишется на Windows: каждая строка заканчивается \r\n.
+	{
+		printf '[preset.0]\r\n\r\n'
+		printf 'name="Aurora Phone"\r\n'
+		printf 'platform="AuroraOS"\r\n'
+		printf 'runnable=true\r\n'
+		printf 'export_filter="all_resources"\r\n'
+		printf 'exclude_filter=""\r\n\r\n'
+		printf '[preset.0.options]\r\n\r\n'
+		printf 'package/organization="ru.test"\r\n'
+		printf 'package/name="smoke"\r\n'
+	} > "$preset"
+
+	local before out rc=0
+	before="$(md5sum "$preset" | cut -d' ' -f1)"
+	out="$("${KIT_ENV[@]}" "GAME_DIR=$proj" bash "$BUILD_X86_SCRIPT" --write-preset 2>&1)" || rc=$?
+	check_eq "CRLF --write-preset: код возврата" "0" "$rc"
+	check_eq "CRLF: существующий файл не перезаписан" "$before" \
+		"$(md5sum "$preset" | cut -d' ' -f1)"
+	check_eq "CRLF: preset.1 не добавлен" "0" "$(count_matches "$preset" '^\[preset\.1\]')"
+
+	out="$("${KIT_ENV[@]}" "GAME_DIR=$proj" bash "$BUILD_X86_SCRIPT" --check 2>&1)"
+	check_regex "CRLF: --check находит пресет Aurora Phone" "$out" \
+		'^[[:space:]]+preset[[:space:]]+Aurora Phone \(индекс 0\)$'
+
+	kit_patch_preset "$proj" >/dev/null 2>&1
+	check_eq "CRLF: после patch ровно одна строка exclude_filter" "1" \
+		"$(count_matches "$preset" '^exclude_filter=')"
+	check_eq "CRLF: exclude_filter получил build/*" "1" \
+		"$(count_exact_lines "$preset" 'exclude_filter="build/*"')"
+	check_eq "CRLF: строк с \r в файле не осталось" "0" \
+		"$(grep -c $'\r' "$preset" || true)"
+	check_eq "CRLF: package/name сохранён" "1" \
+		"$(count_exact_lines "$preset" 'package/name="smoke"')"
+}
+
+# ---------------------------------------------------------------------------
+# 15. fetch_engine.sh --force с битой контрольной суммой.
+# ---------------------------------------------------------------------------
+test_fetch_force_bad_checksum() {
+	printf '\n[15] fetch_engine.sh --force: битая контрольная сумма\n'
+	local sandbox="$TMP_ROOT/fetch-force"
+	local src="$sandbox/src" dest="$sandbox/dest"
+	mkdir -p "$src" "$dest"
+	local asset="Godot_v${GODOT_TAG}_linux.x86_64"
+	printf 'рабочий бинарник\n' > "$dest/$asset"
+	printf 'битая копия\n' > "$src/$asset"
+	printf '%s  %s\n' \
+		'0000000000000000000000000000000000000000000000000000000000000000' \
+		"$asset" > "$src/SHA256SUMS"
+
+	local before out rc=0
+	before="$(md5sum "$dest/$asset" | cut -d' ' -f1)"
+	out="$("${KIT_ENV[@]}" bash "$FETCH_SCRIPT" --from-dir "$src" --dest "$dest" \
+		--templates-dir "$sandbox/templates" --no-templates --force --no-verify 2>&1)" || rc=$?
+	check_ne "--force с битым SHA-256: код возврата != 0" "0" "$rc"
+	check_contains "--force с битым SHA-256: сказано про контрольную сумму" \
+		"$out" "контрольная сумма"
+	check_eq "--force с битым SHA-256: рабочий файл цел" "$before" \
+		"$(md5sum "$dest/$asset" | cut -d' ' -f1)"
+	check_eq "--force с битым SHA-256: .part удалён" "no" \
+		"$(path_exists "$dest/$asset.part")"
+	check_eq "--force с битым SHA-256: в DEST только старый файл" "1" \
+		"$(find "$dest" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+}
+
+# ---------------------------------------------------------------------------
+# 16. deploy_emulator.sh: дефолтный SSH-ключ и сверка VERSION-RELEASE.
+# ---------------------------------------------------------------------------
+test_deploy_check_and_version() {
+	printf '\n[16] deploy_emulator.sh: ключ SDK и VERSION-RELEASE\n'
+	local sandbox="$TMP_ROOT/deploy"
+	local proj="$sandbox/project"
+	mkdir -p "$proj" "$sandbox/sdk/vmshare/ssh/private_keys"
+	new_project "$proj"
+	write_deploy_mocks "$sandbox/bin"
+	local key="$sandbox/sdk/vmshare/ssh/private_keys/sdk"
+	: > "$key"
+	local rpm_file="$sandbox/smoke.rpm"
+	printf 'тестовый RPM\n' > "$rpm_file"
+
+	local -a deploy_env=(
+		env -i
+		"PATH=$sandbox/bin:$PATH"
+		"HOME=$sandbox/home"
+		"TMPDIR=${TMPDIR:-/tmp}"
+		"LANG=C.UTF-8"
+		"AURORA_SDK_HOME=$sandbox/sdk"
+		"SFDK=$sandbox/bin/sfdk"
+		"GAME_DIR=$proj"
+		"BUILD_DIR=$proj/build"
+	)
+
+	local out rc=0
+	out="$("${deploy_env[@]}" bash "$DEPLOY_SCRIPT" --check --rpm "$rpm_file" 2>&1)" || rc=$?
+	check_eq "deploy --check: код возврата" "0" "$rc"
+	check_contains "deploy --check: найден дефолтный SSH-ключ SDK" "$out" "key=$key"
+	check_regex "deploy --check: версия-релиз из rpm -qp" "$out" \
+		'^Версия пакета[[:space:]]+1\.2\.3-1$'
+	check_contains "deploy --check: SSH-эндпоинт из sfdk device list" "$out" \
+		"defaultuser@127.0.0.1:2223"
+
+	rc=0
+	out="$("${deploy_env[@]}" "MOCK_INSTALLED_VERSION=1.2.3-1" bash "$DEPLOY_SCRIPT" \
+		--rpm "$rpm_file" --skip-sign --no-start --no-prompt --install-wait 1 2>&1)" || rc=$?
+	check_eq "deploy: установка при совпадении версии: код возврата" "0" "$rc"
+	check_contains "deploy: ok-сообщение содержит VERSION-RELEASE" "$out" \
+		"установлен: ru.test.smoke-1.2.3-1"
+
+	# Расхождение версии-релиза не должно считаться успешной установкой.
+	rc=0
+	out="$("${deploy_env[@]}" "MOCK_INSTALLED_VERSION=1.2.3-9" bash "$DEPLOY_SCRIPT" \
+		--rpm "$rpm_file" --skip-sign --no-start --no-prompt --install-wait 1 2>&1)" || rc=$?
+	check_ne "deploy: другая версия на устройстве -> код возврата != 0" "0" "$rc"
+	check_contains "deploy: показан локальный пакет" "$out" \
+		"Локальный пакет: ru.test.smoke-1.2.3-1"
+	check_contains "deploy: показана версия на устройстве" "$out" \
+		"На устройстве:   1.2.3-9"
+}
+
+# ---------------------------------------------------------------------------
+# 17. build_x86_64_rpm.sh --check: только стоковый Godot.
+# ---------------------------------------------------------------------------
+test_build_check_stock_godot() {
+	printf '\n[17] build_x86_64_rpm.sh --check со стоковым Godot\n'
+	local proj="$TMP_ROOT/stock-project" stock="$TMP_ROOT/godot-stock"
+	new_project "$proj"
+	# Заглушка без строки-маркера платформы: grep-детектор её не примет.
+	cat > "$stock" <<'EOF'
+#!/usr/bin/env bash
+# Заглушка «стокового» Godot: платформы экспорта Авроры в нем нет.
+if [[ "${1:-}" == "--headless" ]]; then
+	printf '4.7.2.stable.official.28e3be3f5\n'
+	exit 0
+fi
+printf 'заглушка стокового Godot\n'
+EOF
+	chmod +x "$stock"
+
+	local out rc=0
+	out="$("${KIT_ENV[@]}" "GAME_DIR=$proj" "GODOT_BIN=$stock" \
+		bash "$BUILD_X86_SCRIPT" --check 2>&1)" || rc=$?
+	check_eq "--check со стоковым Godot: код возврата" "0" "$rc"
+	check_contains "--check: предупреждение про стоковый Godot" "$out" \
+		"найден стоковый Godot без платформы AuroraOS"
+	check_contains "--check: окружение НЕ ГОТОВО" "$out" "НЕ ГОТОВО"
+}
+
+# ---------------------------------------------------------------------------
+# 18. kit_render_template: однопроходная подстановка.
+# ---------------------------------------------------------------------------
+test_render_template_single_pass() {
+	printf '\n[18] kit_render_template: однопроходность\n'
+	local dir="$TMP_ROOT/render"
+	mkdir -p "$dir"
+	printf 'A=@A@ B=@B@\n' > "$dir/tpl.in"
+
+	kit_helper "$dir" kit_render_template "$dir/tpl.in" "$dir/out.txt" \
+		'A=1' 'B=zzz' >/dev/null
+	check_eq "render: обычная подстановка" "A=1 B=zzz" "$(cat "$dir/out.txt")"
+
+	# Значение с @B@ не должно подставляться повторно: рендер однопроходный.
+	kit_helper "$dir" kit_render_template "$dir/tpl.in" "$dir/out2.txt" \
+		'A=@B@' 'B=zzz' >/dev/null
+	check_eq "render: @B@ в значении остаётся литеральным" "A=@B@ B=zzz" \
+		"$(cat "$dir/out2.txt")"
+}
+
+# ---------------------------------------------------------------------------
 # Запуск
 # ---------------------------------------------------------------------------
 test_help_and_version
@@ -593,6 +863,12 @@ test_workspace_path
 test_xkbcommon_versions
 test_sdk_version_gate
 test_aarch64_wrapper
+test_slug_under_c_locale
+test_crlf_preset
+test_fetch_force_bad_checksum
+test_deploy_check_and_version
+test_build_check_stock_godot
+test_render_template_single_pass
 
 printf '\n----------------------------------------------------------------\n'
 printf 'проверок: %d, провалов: %d\n' "$((PASS_COUNT + FAIL_COUNT))" "$FAIL_COUNT"

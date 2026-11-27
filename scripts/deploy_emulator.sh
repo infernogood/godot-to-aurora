@@ -30,7 +30,8 @@ godot-to-aurora — установка RPM в эмулятор Aurora OS
 ОПЦИИ
       --rpm PATH          RPM для установки (по умолчанию — новейший в
                           build/rpmbuild/RPMS).
-      --device NAME       Устройство sfdk (по умолчанию — первое из списка).
+      --device NAME       Устройство sfdk. По умолчанию выбирается автоматически:
+                          эмулятор для x86_64-пакета, реальное устройство для aarch64.
       --emulator NAME     Имя эмулятора для запуска (по умолчанию — первое из
                           `sfdk emulator list`).
       --no-start          Не запускать эмулятор; падать, если он недоступен.
@@ -54,7 +55,8 @@ godot-to-aurora — установка RPM в эмулятор Aurora OS
   AURORA_SSH_HOST=HOST    SSH-хост устройства (по умолчанию — из sfdk).
   AURORA_SSH_PORT=PORT    SSH-порт устройства.
   AURORA_SSH_USER=USER    SSH-пользователь (по умолчанию defaultuser).
-  AURORA_SSH_KEY=FILE     Приватный SSH-ключ устройства.
+  AURORA_SSH_KEY=FILE     Приватный SSH-ключ устройства (по умолчанию
+                          <SDK>/vmshare/ssh/private_keys/sdk).
 
 ЗАМЕЧАНИЯ
   * Запускайте игру из меню приложений, а не из шелла: только тогда работают
@@ -120,17 +122,86 @@ if (( STRICT_SDK && ! KIT_SDK_SUPPORTED && ! CHECK_ONLY )); then
 fi
 
 # ---------------------------------------------------------------------------
-# Поиск устройства
+# Поиск RPM и устройства
 # ---------------------------------------------------------------------------
+# Порядок важен: архитектура пакета определяет, какое устройство подходит
+# (x86_64 -> эмулятор, aarch64 -> реальное устройство), а не наоборот.
+newest_rpm_in() { # newest_rpm_in <dir> — самый новый RPM по версии в имени
+	local dir="$1" name
+	[[ -d "$dir" ]] || return 0
+	name="$(find "$dir" -maxdepth 1 -type f -name '*.rpm' -printf '%f\n' 2>/dev/null \
+		| sort -V | tail -1 || true)"
+	[[ -n "$name" ]] || return 0
+	printf '%s/%s\n' "$dir" "$name"
+}
+
+find_rpm() {
+	if [[ -n "$RPM_ARG" ]]; then
+		[[ -f "$RPM_ARG" ]] || kit_die "RPM не найден: $RPM_ARG"
+		kit_abspath "$RPM_ARG"
+		return 0
+	fi
+	local preferred="" newest=""
+	if (( IS_EMULATOR )); then
+		preferred="$BUILD_DIR/rpmbuild/RPMS/x86_64"
+	elif [[ -n "$DEVICE_NAME" ]]; then
+		preferred="$BUILD_DIR/rpmbuild/RPMS/aarch64"
+	fi
+	[[ -n "$preferred" ]] && newest="$(newest_rpm_in "$preferred")"
+	[[ -z "$newest" ]] && newest="$(newest_rpm_in "$BUILD_DIR/rpmbuild/RPMS")"
+	[[ -n "$newest" ]] || return 1
+	printf '%s\n' "$newest"
+}
+
+load_rpm_metadata() {
+	RPM_PATH="$1"
+	RPM_BASENAME="$(basename -- "$RPM_PATH")"
+	kit_has rpm || kit_die "для определения имени, версии и архитектуры пакета нужен rpm (rpm -qp)."
+	PKG_FULL="$(rpm -qp --queryformat '%{NAME}' "$RPM_PATH" 2>/dev/null)" || PKG_FULL=""
+	[[ -n "$PKG_FULL" ]] || kit_die "rpm не смог прочитать имя пакета из $RPM_BASENAME"
+	RPM_ARCH="$(rpm -qp --queryformat '%{ARCH}' "$RPM_PATH" 2>/dev/null)" || RPM_ARCH=""
+	[[ -n "$RPM_ARCH" ]] || kit_die "rpm не смог прочитать архитектуру $RPM_BASENAME"
+	RPM_VERSION_RELEASE="$(rpm -qp --queryformat '%{VERSION}-%{RELEASE}' "$RPM_PATH" 2>/dev/null)" \
+		|| RPM_VERSION_RELEASE=""
+	[[ -n "$RPM_VERSION_RELEASE" ]] \
+		|| kit_die "rpm не смог прочитать версию-релиз из $RPM_BASENAME"
+	PKG_ORG="${PKG_FULL%.*}"
+	PKG_APP="${PKG_FULL##*.}"
+}
+
+RPM_PATH=""
+RPM_BASENAME=""
+RPM_VERSION_RELEASE=""
+PKG_FULL=""
+RPM_ARCH=""
+PKG_ORG=""
+PKG_APP=""
+
+# Предварительный пакет нужен до выбора устройства: по его архитектуре
+# решается, искать эмулятор или реальное устройство.
+rpm_candidate=""
+if [[ -n "$RPM_ARG" ]]; then
+	[[ -f "$RPM_ARG" ]] || kit_die "RPM не найден: $RPM_ARG"
+	rpm_candidate="$(kit_abspath "$RPM_ARG")"
+else
+	rpm_candidate="$(newest_rpm_in "$BUILD_DIR/rpmbuild/RPMS/x86_64")"
+	[[ -n "$rpm_candidate" ]] || rpm_candidate="$(newest_rpm_in "$BUILD_DIR/rpmbuild/RPMS/aarch64")"
+	[[ -n "$rpm_candidate" ]] || rpm_candidate="$(newest_rpm_in "$BUILD_DIR/rpmbuild/RPMS")"
+fi
+if [[ -n "$rpm_candidate" ]]; then
+	load_rpm_metadata "$rpm_candidate"
+fi
+
 device_lines() {
 	[[ -n "$SFDK" ]] || return 0
 	timeout 60 "$SFDK" device list 2>/dev/null || true
 }
 
 DEVICE_LIST="$(device_lines)"
-if [[ -z "$DEVICE_NAME" ]]; then
-	DEVICE_NAME="$(sed -n 's/^#[0-9][0-9]*[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' <<<"$DEVICE_LIST" | head -1)"
-fi
+
+device_names() {
+	sed -n 's/^#[0-9][0-9]*[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' <<<"$DEVICE_LIST"
+}
 
 # Блок `sfdk device list` для выбранного устройства: тип (эмулятор/устройство)
 # и SSH endpoint берутся только из него.
@@ -150,13 +221,75 @@ device_section() {
 	' <<<"$DEVICE_LIST"
 }
 
+device_is_emulator() {
+	grep -qiE 'эмулятор|emulator' <<<"$(device_section "$1")"
+}
+
+# Список устройств для сообщений об ошибке автовыбора.
+print_device_list() {
+	local name found=0
+	while IFS= read -r name; do
+		[[ -n "$name" ]] || continue
+		if device_is_emulator "$name"; then
+			printf '  %s (эмулятор)\n' "$name" >&2
+		else
+			printf '  %s (устройство)\n' "$name" >&2
+		fi
+		found=1
+	done < <(device_names)
+	(( found )) || printf '  <устройств нет, см. sfdk device list>\n' >&2
+}
+
+# pick_device WANT_EMULATOR — первое устройство нужного типа.
+pick_device() {
+	local want="$1" name
+	while IFS= read -r name; do
+		[[ -n "$name" ]] || continue
+		if (( want )); then
+			if device_is_emulator "$name"; then
+				printf '%s\n' "$name"
+				return 0
+			fi
+		elif ! device_is_emulator "$name"; then
+			printf '%s\n' "$name"
+			return 0
+		fi
+	done < <(device_names)
+	return 1
+}
+
+if [[ -z "$DEVICE_NAME" ]]; then
+	want_emulator=1
+	if [[ -n "$rpm_candidate" && "$RPM_ARCH" != "x86_64" ]]; then
+		want_emulator=0
+	fi
+	if (( want_emulator )); then
+		device_hint="эмулятор (пакет x86_64)"
+	else
+		device_hint="реальное устройство (пакет $RPM_ARCH)"
+	fi
+	DEVICE_NAME="$(pick_device "$want_emulator")" || DEVICE_NAME=""
+	if [[ -z "$DEVICE_NAME" && -z "$rpm_candidate" ]] && (( CHECK_ONLY )); then
+		# Без собранного пакета --check лишь показывает обстановку.
+		DEVICE_NAME="$(device_names | head -1 || true)"
+	fi
+	if [[ -z "$DEVICE_NAME" ]]; then
+		kit_err "нет устройства типа «$device_hint» для этого сценария."
+		printf 'Доступные устройства:\n' >&2
+		print_device_list
+		kit_die "запустите нужный эмулятор, подключите устройство или укажите --device."
+	fi
+fi
+
 DEVICE_SECTION="$(device_section "$DEVICE_NAME")"
 SSH_ENDPOINT="$(grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[0-9]+' <<<"$DEVICE_SECTION" | head -1 || true)"
 
 SSH_HOST="${AURORA_SSH_HOST:-}"
 SSH_PORT="${AURORA_SSH_PORT:-}"
 SSH_USER="${AURORA_SSH_USER:-}"
-SSH_KEY="${AURORA_SSH_KEY:-}"
+# SDK кладёт ключ эмулятора/dev-ключа в vmshare; путь переопределяется
+# AURORA_SSH_KEY (см. --check: key=...).
+SSH_KEY="${AURORA_SSH_KEY:-$(kit_sdk_home)/vmshare/ssh/private_keys/sdk}"
 if [[ -n "$SSH_ENDPOINT" ]]; then
 	SSH_USER="${SSH_USER:-${SSH_ENDPOINT%@*}}"
 	SSH_HOST="${SSH_HOST:-${SSH_ENDPOINT#*@}}"
@@ -182,56 +315,16 @@ if [[ -z "$EMULATOR_NAME" && -n "$SFDK" ]]; then
 	EMULATOR_NAME="$(timeout 60 "$SFDK" emulator list 2>/dev/null | awk 'NF && $1 !~ /^\[/ { print $1; exit }' || true)"
 fi
 
-# ---------------------------------------------------------------------------
-# Поиск RPM
-# ---------------------------------------------------------------------------
-newest_rpm_in() { # newest_rpm_in <dir>
-	local dir="$1"
-	[[ -d "$dir" ]] || return 0
-	find "$dir" -maxdepth 1 -type f -name '*.rpm' -printf '%T@ %p\n' 2>/dev/null \
-		| sort -n | tail -1 | cut -d' ' -f2- || true
-}
-
-find_rpm() {
-	if [[ -n "$RPM_ARG" ]]; then
-		[[ -f "$RPM_ARG" ]] || kit_die "RPM не найден: $RPM_ARG"
-		kit_abspath "$RPM_ARG"
-		return 0
+# Итоговый пакет выбирается уже под тип устройства (x86_64 или aarch64).
+if [[ -z "$RPM_ARG" ]]; then
+	if final_rpm="$(find_rpm)"; then
+		load_rpm_metadata "$final_rpm"
+	else
+		RPM_PATH=""
+		RPM_BASENAME=""
+		RPM_VERSION_RELEASE=""
+		PKG_FULL=""
 	fi
-	local preferred="" newest=""
-	if (( IS_EMULATOR )); then
-		preferred="$BUILD_DIR/rpmbuild/RPMS/x86_64"
-	elif [[ -n "$DEVICE_NAME" ]]; then
-		preferred="$BUILD_DIR/rpmbuild/RPMS/aarch64"
-	fi
-	[[ -n "$preferred" ]] && newest="$(newest_rpm_in "$preferred")"
-	[[ -z "$newest" ]] && newest="$(newest_rpm_in "$BUILD_DIR/rpmbuild/RPMS")"
-	[[ -n "$newest" ]] || return 1
-	printf '%s\n' "$newest"
-}
-
-load_rpm_metadata() {
-	RPM_PATH="$1"
-	RPM_BASENAME="$(basename -- "$RPM_PATH")"
-	kit_has rpm || kit_die "для определения имени и архитектуры пакета нужен rpm (rpm -qp)."
-	PKG_FULL="$(rpm -qp --queryformat '%{NAME}' "$RPM_PATH" 2>/dev/null)" || PKG_FULL=""
-	[[ -n "$PKG_FULL" ]] || kit_die "rpm не смог прочитать имя пакета из $RPM_BASENAME"
-	RPM_ARCH="$(rpm -qp --queryformat '%{ARCH}' "$RPM_PATH" 2>/dev/null)" || RPM_ARCH=""
-	[[ -n "$RPM_ARCH" ]] || kit_die "rpm не смог прочитать архитектуру $RPM_BASENAME"
-	PKG_ORG="${PKG_FULL%.*}"
-	PKG_APP="${PKG_FULL##*.}"
-}
-
-RPM_PATH=""
-RPM_BASENAME=""
-PKG_FULL=""
-RPM_ARCH=""
-PKG_ORG=""
-PKG_APP=""
-if RPM_PATH="$(find_rpm)"; then
-	load_rpm_metadata "$RPM_PATH"
-else
-	RPM_PATH=""
 fi
 
 no_rpm_message() {
@@ -248,7 +341,7 @@ no_rpm_message() {
 if (( CHECK_ONLY )); then
 	if [[ -n "$RPM_PATH" ]]; then
 		printf 'RPM                %s (%s)\n' "$RPM_PATH" "$(du -h "$RPM_PATH" | cut -f1)"
-		printf 'Пакет              %s (%s)\n' "$PKG_FULL" "$RPM_ARCH"
+		printf 'Пакет              %s %s (%s)\n' "$PKG_FULL" "$RPM_VERSION_RELEASE" "$RPM_ARCH"
 	else
 		printf 'RPM                <не найден>\n'
 	fi
@@ -256,6 +349,7 @@ if (( CHECK_ONLY )); then
 Устройство         ${DEVICE_NAME:-<нет>}
 Эмулятор           ${EMULATOR_NAME:-<нет>} (локальный: $IS_EMULATOR)
 SSH                ${SSH_USER}@${SSH_HOST:-<нет>}:${SSH_PORT:-<нет>} key=${SSH_KEY:-нет}
+Версия пакета      ${RPM_VERSION_RELEASE:-<нет>}
 SDK build env      $(kit_sdk_description)
 SDK version        ${KIT_SDK_VERSION:-<нет>} (supported ${SDK_SUPPORTED_PREFIX}*)
 Ключ подписи       $KEY_PATH $([[ -f "$KEY_PATH" ]] && printf '(есть)' || printf '(нет)')
@@ -285,7 +379,7 @@ if (( ! SIGN_ONLY )); then
 fi
 
 # Пути в том виде, в котором их видит rpmsign-external: контейнер SDK 5.2
-# видит только проект, смонтированный в /workspace; sb2 видит пути хоста.
+# видит только проект, смонтированный в /workspace.
 mode_path() {
 	if [[ "$KIT_SDK_MODE" == "docker" ]]; then
 		kit_to_workspace_path "$1"
@@ -381,15 +475,8 @@ rpmsign_exec() {
 			[[ -n "$KIT_SDK_RUN" ]] || return 1
 			WORKSPACE_DIR="$PROJECT_ROOT" "$KIT_SDK_RUN" rpmsign-external "$@"
 			;;
-		sfdk)
-			[[ -n "$SFDK" && -n "$KIT_SDK_TARGET" ]] || return 1
-			"$SFDK" engine exec sb2 -t "$KIT_SDK_TARGET" rpmsign-external "$@"
-			;;
-		sb2)
-			[[ -n "$KIT_SDK_TARGET" ]] || return 1
-			sb2 -t "$KIT_SDK_TARGET" rpmsign-external "$@"
-			;;
 		*)
+			# Резервный путь: rpmsign-external установлен на хосте.
 			if kit_has rpmsign-external; then
 				rpmsign-external "$@"
 			else
@@ -473,6 +560,8 @@ copy_to_device() {
 	if (( IS_EMULATOR )) && is_local_host; then
 		ssh_opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 	fi
+	# Каталог для scp может отсутствовать на свежем образе.
+	sfdk_cmd device exec mkdir -p "$REMOTE_DIR" >/dev/null 2>&1 || return 1
 	kit_log "копирую $RPM_BASENAME на ${SSH_USER}@${SSH_HOST}:${SSH_PORT}:$REMOTE_DIR/"
 	scp -q -P "$SSH_PORT" -i "$SSH_KEY" "${ssh_opts[@]}" \
 		"$RPM_PATH" "${SSH_USER}@${SSH_HOST}:$REMOTE_DIR/"
@@ -492,10 +581,21 @@ fi
 # ---------------------------------------------------------------------------
 # Установка через ru.omp.APM
 # ---------------------------------------------------------------------------
+# `sfdk device exec` передаёт команду удалённому shell, поэтому каждый
+# аргумент экранируется через printf %q: иначе, например, <true> станет
+# редиректом и gdbus получит обрезанную строку.
+device_exec_quoted() { # device_exec_quoted <args...>
+	local arg cmd=""
+	for arg in "$@"; do
+		cmd+="$(printf '%q' "$arg") "
+	done
+	sfdk_cmd device exec "${cmd% }"
+}
+
 kit_log "запрашиваю установку через ru.omp.APM…"
 prompt_value="<true>"
 (( SHOW_PROMPT )) || prompt_value="<false>"
-if ! sfdk_cmd device exec gdbus call -y -d ru.omp.APM -o /ru/omp/APM \
+if ! device_exec_quoted gdbus call -y -d ru.omp.APM -o /ru/omp/APM \
 	-m ru.omp.APM.Install "$DEVICE_RPM_PATH" "{'ShowPrompt': $prompt_value}"; then
 	kit_die "запрос установки в APM завершился ошибкой.
 Пакет должен быть подписан доверенным сертификатом и доступен defaultuser:
@@ -506,19 +606,24 @@ if (( SHOW_PROMPT )); then
 	kit_info "подтвердите диалог установки на экране эмулятора."
 fi
 
-kit_log "жду появления пакета $PKG_FULL (до ${INSTALL_WAIT}s)…"
+kit_log "жду установки $PKG_FULL-$RPM_VERSION_RELEASE (до ${INSTALL_WAIT}s)…"
 installed=""
 deadline=$((SECONDS + INSTALL_WAIT))
 while (( SECONDS < deadline )); do
-	installed="$(sfdk_cmd device exec rpm -q "$PKG_FULL" 2>/dev/null | tr -d '\r' | tail -1 || true)"
-	[[ -n "$installed" && "$installed" == "$PKG_FULL"* ]] && break
+	# Сравниваем не только имя, но и версию-релиз собранного пакета.
+	installed="$(sfdk_cmd device exec rpm -q --queryformat '%{VERSION}-%{RELEASE}' \
+		"$PKG_FULL" 2>/dev/null | tr -d '\r' | tail -1 || true)"
+	[[ "$installed" == "$RPM_VERSION_RELEASE" ]] && break
 	sleep 3
 done
-if [[ -n "$installed" && "$installed" == "$PKG_FULL"* ]]; then
-	kit_ok "установлен: $installed"
+if [[ "$installed" == "$RPM_VERSION_RELEASE" ]]; then
+	kit_ok "установлен: $PKG_FULL-$installed"
 else
-	kit_err "пакет пока не установлен."
+	kit_err "пакет пока не установлен или на устройстве другая версия."
 	cat >&2 <<EOF
+Локальный пакет: $PKG_FULL-$RPM_VERSION_RELEASE
+На устройстве:   ${installed:-<нет>}
+
 Если менеджер пакетов показал ошибку, проверьте:
   sfdk device exec journalctl -n 200 --no-pager | grep -i -E 'apm|rpm|sign'
 
