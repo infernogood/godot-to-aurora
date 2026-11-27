@@ -38,8 +38,9 @@
 2. заменяет `$WORKSPACE_DIR` на `/workspace` в `PWD` и во **всех аргументах**;
 3. запускает `docker run --rm -v "$WORKSPACE_DIR:/workspace" -w <путь> <образ> <аргументы>`.
 
-Имя образа зашито в `tools/run` (`aurora-build-tools-deus:5.2.1.200` в проверенной
-установке). Кит читает его оттуда, но его можно переопределить `AURORA_BUILD_IMAGE`.
+Имя образа зашито в `tools/run` (`aurora-build-tools-<user>:5.2.1.200` в проверенной
+установке, `<user>` — логин владельца SDK). Кит читает его оттуда, но его можно
+переопределить `AURORA_BUILD_IMAGE`.
 
 ---
 
@@ -123,11 +124,17 @@ until sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec true; do
 ```
 
 SSH к эмулятору: `defaultuser@127.0.0.1:2223`, ключ
-`~/AuroraOS/vmshare/ssh/private_keys/sdk`, пароль `devel-su` по умолчанию — `defaultuser`.
+`~/AuroraOS/vmshare/ssh/private_keys/sdk` (`deploy_emulator.sh` берёт его по умолчанию,
+переопределяется `AURORA_SSH_KEY`), пароль `devel-su` по умолчанию — `defaultuser`.
 
 ---
 
 ## 4. Сборочное окружение SDK 5.2
+
+Способ доступа к сборочному окружению определяет `kit_detect_sdk`: `docker` — SDK 5.2 с
+`tools/run` и образом сборки (единственный рабочий режим), либо `none` — собирать нечем.
+`sfdk` нужен только для устройств и эмулятора (`device exec`, `journalctl`), команд
+сборки в 5.2 нет.
 
 Образ `aurora-build-tools-*` — это **нативный rootfs Авроры**, а не кросс-тулчейн:
 
@@ -489,9 +496,7 @@ sfdk -c device="<имя>" device exec journalctl -f -t <pkg>
   D-Bus (кит делает это сам).
 
 Кит рассчитан на SDK 5.2.x (Docker `tools/run`); `SDK_SUPPORTED_PREFIX` задаёт
-поддерживаемую серию, а `--strict-sdk` блокирует 5.1.x/5.3.x и другие версии. Для
-старых окружений остался legacy-путь `sfdk engine`/`sb2` — только для сборки
-x86_64-шаблона и только если современного режима нет; SCons там запускается как
-`scons` или `python3 -m SCons` (путь `tools/scons/scripts/scons.py` из старых
-инструкций не существует). Сборка aarch64-legacy не поддерживается — пакет
-собирается только в режиме SDK 5.2.
+поддерживаемую серию, а `--strict-sdk` блокирует 5.1.x/5.3.x и другие версии. Режим
+сборочного окружения (`kit_detect_sdk`) — `docker` или `none`: legacy-путей через
+`sfdk engine`/`sb2` в ките больше нет, а сборка aarch64 идёт тем же способом, что и
+x86_64 (см. § 5).
