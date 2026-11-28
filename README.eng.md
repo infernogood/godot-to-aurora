@@ -437,6 +437,22 @@ Cyrillic slot collisions, version migration, and lifecycle behavior. CI runs
 
 ---
 
+## Engine Releases
+
+Without `--from-dir`, `fetch_engine.sh` downloads the prepared bundle from
+[this repository's GitHub Release](https://github.com/infernogood/godot-to-aurora/releases/tag/engine-4.7.2-auroraos1).
+The `engine-4.7.2-auroraos1` release includes the Aurora Godot editor, templates
+for the emulator and devices, `SHA256SUMS`, and licenses. This is where the
+SDK 5.2-built x86_64 template required for emulator RPMs is published.
+
+The upstream fork has a separate [`savegame/godot` release](https://github.com/savegame/godot/releases/tag/4.7.2-auroraos1).
+It contains the editor and ARM templates, but is not the default source used by
+`fetch_engine.sh` and does not include the ready-to-use x86_64 template.
+Instructions for publishing both sets of artifacts are in
+[docs/RELEASES_GUIDE.md](docs/RELEASES_GUIDE.md).
+
+---
+
 ## Ecosystem and Documentation
 
 * [`AGENTS.md`](AGENTS.md) — Agent playbook: process, invariants, checklist.

@@ -19,7 +19,7 @@
 [Требования](#требования) ·
 [Параметры](#параметры-пакета) ·
 [Частые проблемы](#частые-проблемы) ·
-[English README](README.end.md)
+[English README](README.eng.md)
 
 </div>
 
@@ -408,6 +408,21 @@ CLI-тесты покрывают флаги, `--check` без SDK, обязат
 экранирование `%`/`"`/`\`, токены `exclude_filter` и кастомный `BUILD_DIR`; headless-тесты —
 safe area, атомарную запись и восстановление сохранений, коллизии кириллических слотов,
 миграцию версий и жизненный цикл. CI гоняет `shellcheck`, `bash -n` и оба набора тестов.
+
+---
+
+## Релизы движка
+
+Без `--from-dir` команда `fetch_engine.sh` скачивает готовый комплект из
+[GitHub Release этого репозитория](https://github.com/infernogood/godot-to-aurora/releases/tag/engine-4.7.2-auroraos1).
+Релиз `engine-4.7.2-auroraos1` включает Aurora-редактор Godot, шаблоны для эмулятора
+и устройств, `SHA256SUMS` и лицензии. Именно здесь лежит собранный для SDK 5.2
+x86_64-шаблон, необходимый для RPM эмулятора.
+
+Отдельно существует [релиз upstream-форка `savegame/godot`](https://github.com/savegame/godot/releases/tag/4.7.2-auroraos1).
+Он содержит редактор и ARM-шаблоны, но не является источником `fetch_engine.sh`
+по умолчанию и не включает готовый x86_64-шаблон. Инструкции по публикации обоих
+наборов артефактов — в [docs/RELEASES_GUIDE.md](docs/RELEASES_GUIDE.md).
 
 ---
 
