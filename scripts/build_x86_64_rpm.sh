@@ -702,6 +702,8 @@ fi
 
 kit_log "экспортирую PCK с пресетом '$preset_name': $PCK_PATH"
 export_log="$BUILD_DIR/export.log"
+# Метка времени до экспорта: по ней отличается свежий PCK от прошлогоднего.
+pck_started="$(date +%s)"
 set +e
 if (( QUIET )); then
 	"$editor" --headless --path "$PROJECT_ROOT" --export-pack "$preset_name" "$PCK_PATH" >"$export_log" 2>&1
@@ -712,8 +714,24 @@ else
 fi
 set -e
 if (( export_rc != 0 )); then
-	tail -n 25 "$export_log" >&2 || true
-	kit_die "экспорт PCK не удался (код $export_rc). Если ошибка про пресет — запустите с --force-preset."
+	# Редактор умеет падать в конце экспорта (SIGABRT 134 после записи PCK,
+	# обычно из-за устаревшего кэша .godot/ от стокового Godot). Если файл
+	# свежий, непустой и с верной магией — упаковку не прерываем.
+	pck_ok=0
+	if [[ -s "$PCK_PATH" ]] \
+		&& [[ "$(head -c 4 -- "$PCK_PATH" 2>/dev/null || true)" == "GDPC" ]] \
+		&& (( $(stat -c %Y -- "$PCK_PATH") >= pck_started )); then
+		pck_ok=1
+	fi
+	if (( pck_ok )); then
+		kit_warn "редактор завершился с кодом $export_rc, но PCK записан и корректен; продолжаю упаковку."
+		kit_warn "вероятная причина - устаревший кэш .godot/ от стокового Godot."
+		kit_info "лечение: удалите $PROJECT_ROOT/.godot и повторите сборку (или запустите --import)."
+		(( QUIET )) || tail -n 5 "$export_log" >&2 || true
+	else
+		tail -n 25 "$export_log" >&2 || true
+		kit_die "экспорт PCK не удался (код $export_rc). Если ошибка про пресет — запустите с --force-preset."
+	fi
 fi
 [[ -s "$PCK_PATH" ]] || kit_die "PCK не создан: $PCK_PATH"
 pck_magic="$(head -c 4 -- "$PCK_PATH" 2>/dev/null || true)"
@@ -798,10 +816,16 @@ if (( BUNDLE_XKBCOMMON )); then
 fi
 
 # ---------------------------------------------------------------------------
-# Лицензии в пакете (%license)
+# Лицензии в пакете
 # ---------------------------------------------------------------------------
+# Валидатор APM 5.2 запрещает любые файлы в /usr/share/licenses/<pkg>
+# (ru.omp.APM.Error.BadPackageContent), поэтому лицензии кладутся внутрь
+# /usr/share/<pkg>: эта директория уже покрыта %{_datadir}/%{name} в %files.
+# Макрос %license не используется намеренно — не возвращайте его.
+#
 # xkbcommon_license_file — текст лицензии библиотеки. Берётся из extra/ после
 # сборки шаблона либо из проверенного архива xkbcommon (кэш в BUILD_DIR).
+# В stdout попадает только путь: загрузка и проверки пишут в stderr.
 xkbcommon_license_file() {
 	local extra="${AURORA_EXTRA_DIR:-$AURORA_WORKSPACE/extra}"
 	local base cached tmp archive
@@ -815,38 +839,38 @@ xkbcommon_license_file() {
 		printf '%s\n' "$cached"
 		return 0
 	fi
-	kit_has tar || return 1
-	tmp="$(mktemp -d)" || return 1
-	archive="$tmp/xkbcommon-$base.tar.xz"
-	if ! download_xkbcommon_archive "$archive" \
-		"https://xkbcommon.org/download/libxkbcommon-${base}.tar.xz" \
-		"https://distfiles.gentoo.org/distfiles/libxkbcommon-${base}.tar.xz"; then
+	{
+		kit_has tar || return 1
+		tmp="$(mktemp -d)" || return 1
+		archive="$tmp/xkbcommon-$base.tar.xz"
+		if ! download_xkbcommon_archive "$archive" \
+			"https://xkbcommon.org/download/libxkbcommon-${base}.tar.xz" \
+			"https://distfiles.gentoo.org/distfiles/libxkbcommon-${base}.tar.xz"; then
+			rm -rf -- "$tmp"
+			return 1
+		fi
+		if ! tar -xJf "$archive" -C "$tmp" "libxkbcommon-${base}/LICENSE"; then
+			rm -rf -- "$tmp"
+			return 1
+		fi
+		mkdir -p "$BUILD_DIR/.licenses"
+		install -m 0644 "$tmp/libxkbcommon-${base}/LICENSE" "$cached"
 		rm -rf -- "$tmp"
-		return 1
-	fi
-	if ! tar -xJf "$archive" -C "$tmp" "libxkbcommon-${base}/LICENSE"; then
-		rm -rf -- "$tmp"
-		return 1
-	fi
-	mkdir -p "$BUILD_DIR/.licenses"
-	install -m 0644 "$tmp/libxkbcommon-${base}/LICENSE" "$cached"
-	rm -rf -- "$tmp"
+	} >&2
 	printf '%s\n' "$cached"
 }
 
-LICENSE_DIR="$RPMBUILD/files/usr/share/licenses/$PKG_FULL"
+LICENSE_DIR="$RPMBUILD/files/usr/share/$PKG_FULL"
 mkdir -p "$LICENSE_DIR"
 # MIT-уведомления Godot и AuroraOS-форка обязательны для любого пакета кита.
 kit_render_template "$KIT_ROOT/THIRD_PARTY_NOTICES.md" "$LICENSE_DIR/LICENSE.Godot" \
 	|| kit_die "не удалось подготовить LICENSE.Godot из THIRD_PARTY_NOTICES.md"
-spec_license_files='%license %{_licensedir}/%{name}/LICENSE.Godot'
 if compgen -G "$RPMBUILD/files/usr/share/$PKG_FULL/lib/libxkbcommon.so.0*" >/dev/null; then
 	xkb_license="$(xkbcommon_license_file)" || xkb_license=""
 	if [[ -n "$xkb_license" ]]; then
 		install -m 0644 "$xkb_license" "$LICENSE_DIR/LICENSE.libxkbcommon"
-		spec_license_files+=$'\n%license %{_licensedir}/%{name}/LICENSE.libxkbcommon'
 	else
-		kit_warn "текст лицензии libxkbcommon не найден; %license этого файла пропущен."
+		kit_warn "текст лицензии libxkbcommon не найден; файл LICENSE.libxkbcommon пропущен."
 	fi
 fi
 
@@ -854,21 +878,24 @@ fi
 # .desktop и .spec
 # ---------------------------------------------------------------------------
 desktop_path="$RPMBUILD/files/usr/share/applications/$PKG_FULL.desktop"
+# APM 5.2 отвергает .desktop с пустым Comment=: гарантируем непустое значение.
+desktop_comment="${PKG_COMMENT:-$PKG_TITLE}"
+[[ -n "$desktop_comment" ]] || desktop_comment="$PKG_FULL"
 kit_render_template "$KIT_TEMPLATES/app.desktop.in" "$desktop_path" \
 	"APP_TITLE=$(kit_escape_desktop "$PKG_TITLE")" \
-	"APP_COMMENT=$(kit_escape_desktop "$PKG_COMMENT")" \
+	"APP_COMMENT=$(kit_escape_desktop "$desktop_comment")" \
 	"PKG_NAME=$(kit_escape_desktop "$PKG_FULL")" \
 	"ORG=$(kit_escape_desktop "$PKG_ORG")" \
 	"APP=$(kit_escape_desktop "$PKG_APP")" \
 	"PERMISSIONS=$(kit_escape_desktop "$PKG_PERMISSIONS")" \
 	"ORIENTATION=$(kit_escape_desktop "$PKG_ORIENTATION")" \
 	"APP_CATEGORIES=$(kit_escape_desktop "$PKG_CATEGORIES")"
-sed -i -e '/^Comment=$/d' -e '/^Permissions=$/d' "$desktop_path"
+sed -i -e '/^Permissions=$/d' "$desktop_path"
 chmod 0644 "$desktop_path"
 kit_log "desktop entry: $desktop_path"
 
 spec_summary="$(kit_escape_spec "$PKG_TITLE")"
-spec_description="${APP_DESCRIPTION:-$PKG_COMMENT}"
+spec_description="${APP_DESCRIPTION:-$desktop_comment}"
 [[ -n "$spec_description" ]] || spec_description="$PKG_TITLE — игра Godot для Aurora OS."
 spec_description="$(kit_escape_spec "$spec_description")"
 changelog_date="$(LC_ALL=C date '+%a %b %d %Y')"
@@ -886,8 +913,7 @@ kit_render_template "$KIT_TEMPLATES/app.spec.in" "$SPEC_PATH" \
 	"LICENSE=$(kit_escape_spec "$PKG_LICENSE")" \
 	"DESCRIPTION=$spec_description" \
 	"CHANGELOG_DATE=$changelog_date" \
-	"REQUIRES_EXCLUDE=$spec_requires_exclude" \
-	"LICENSE_FILES=$spec_license_files"
+	"REQUIRES_EXCLUDE=$spec_requires_exclude"
 kit_log "spec: $SPEC_PATH"
 
 kit_info "payload: $(find "$RPMBUILD/files" -type f | wc -l) файлов, $(du -sh "$RPMBUILD/files" | cut -f1)"

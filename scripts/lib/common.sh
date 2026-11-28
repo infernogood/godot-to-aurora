@@ -32,7 +32,7 @@ if [[ -f "$KIT_VERSIONS_FILE" ]]; then
 	source "$KIT_VERSIONS_FILE"
 fi
 
-KIT_VERSION="${KIT_VERSION:-1.1.1}"
+KIT_VERSION="${KIT_VERSION:-1.1.2}"
 GODOT_AURORA_TAG="${GODOT_AURORA_TAG:-4.7.2-auroraos1}"
 GODOT_AURORA_SHA="${GODOT_AURORA_SHA:-17d8f3f283a00a1182da7b797edb85eacd831091}"
 GODOT_TEMPLATE_VERSION="${GODOT_TEMPLATE_VERSION:-4.7.2.stable}"
@@ -193,7 +193,9 @@ kit_download() {
 	local url="$1" dest="$2"
 	kit_has curl || kit_die "для загрузки $url требуется curl"
 	mkdir -p -- "$(dirname -- "$dest")"
-	kit_log "загрузка $(basename -- "$dest")…"
+	# Сообщение о загрузке — только в stderr: функцию зовут и из $(...),
+	# где stdout должен остаться чистым.
+	kit_log "загрузка $(basename -- "$dest")…" >&2
 	if ! curl --fail --location --retry 3 --retry-delay 2 \
 		--connect-timeout 30 --progress-bar \
 		--output "$dest.part" "$url"; then
@@ -611,6 +613,8 @@ kit_load_package_params() {
 
 	# shellcheck disable=SC2034 # читается скриптами сборки
 	PKG_COMMENT="${APP_COMMENT:-$(kit_read_project_setting application/config/description "")}"
+	# APM 5.2 отклоняет .desktop с пустым Comment=: подставляем заголовок.
+	PKG_COMMENT="${PKG_COMMENT:-$PKG_TITLE}"
 	PKG_LICENSE="${RPM_LICENSE:-Proprietary}"
 	# shellcheck disable=SC2034 # читается скриптами сборки
 	PKG_CATEGORIES="${APP_CATEGORIES:-Game}"
