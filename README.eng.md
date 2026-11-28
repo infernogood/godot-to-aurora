@@ -16,6 +16,7 @@ both the emulator and a device, without learning the Aurora SDK by hand.**
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [Quick Start](#quick-start) ·
+[Compatibility matrix](#compatibility-matrix) ·
 [Manual Build](#manual-build) ·
 [Requirements](#requirements) ·
 [Parameters](#package-parameters) ·
@@ -223,7 +224,7 @@ Perform this setup once on a clean machine; skip it if `--check` passes.
    `~/AuroraOS/bin/sfdk --version`. Set `AURORA_SDK_HOME` if the SDK is in another
    directory. The kit supports the `5.2.x` series: SDK `5.1.x`/`5.3.x` prints a
    warning, while `--strict-sdk` returns an error. Layout details are in
-   [docs/SDK_5_2_ARCHITECTURE.md § 1](docs/SDK_5_2_ARCHITECTURE.md#1-what-is-installed-and-where).
+   [docs/SDK_5_2_ARCHITECTURE.md § 1](docs/SDK_5_2_ARCHITECTURE.md#1-что-установлено-и-где-лежит).
 2. **Docker and image.** The SDK installer downloads
    `sdk-build-tools-5.2.1.200-x86_64.tar` and tags the image
    `aurora-build-tools-<user>:5.2.1.200`. Check:
@@ -243,6 +244,20 @@ Perform this setup once on a clean machine; skip it if `--check` passes.
    Never copy signing keys into the repository.
 
 ---
+
+## Compatibility matrix
+
+SDK and fork versions are synchronized with [`versions.env`](versions.env).
+
+| Component | Supported variant | Status | Notes |
+|---|---|---|---|
+| Aurora OS / SDK | `5.2.x` (verified on `5.2.1.200`) | ✅ Supported | `5.1.x` / `5.3.x` warn (`--strict-sdk` blocks the build) |
+| Godot Engine | Fork `4.7.2-auroraos1` (`savegame/godot`) | ✅ Supported | Stock Godot cannot export for Aurora OS |
+| Rendering and display | `gl_compatibility` (GLES3) + Wayland | ✅ Supported | Vulkan and X11 are unavailable on Aurora |
+| Scripts and extensions | GDScript | ✅ Supported | C# / .NET and third-party GDExtensions require a native build |
+| `x86_64` architecture | QEMU/KVM emulator | ✅ Verified | Full cycle: build, signing, APM, Sailjail, saves in `user://` |
+| `aarch64` architecture | Smartphones / tablets | ⚠️ Partial | RPM build and ELF checks work; physical-device testing awaits feedback |
+| Host OS | Linux `x86_64` (Docker + KVM) | ✅ Supported | Windows and macOS are not supported |
 
 ## Project Structure
 
@@ -274,12 +289,7 @@ godot-to-aurora/
 | `AuroraSafeArea` | Screen-cutout and corner offsets without hardcoded pixels |
 | `fonts/` | Liberation Sans/Mono: on Aurora, `fontconfig=no` and system fonts are unavailable |
 
-### What the Kit Does Not Do
-
-The kit **does not** rewrite gameplay or graphics, guarantee Godot 3.x, C#/.NET,
-or GDExtension support without native builds, build an `aarch64` template (ready
-`auroraos_*.arm64` templates come from the engine release), or replace testing on
-a physical device.
+The kit adapts platform integration without rewriting gameplay or graphics.
 
 ---
 
@@ -417,7 +427,7 @@ developer mode on the phone.
 | `SamePackageIsInstalled` | Increase `APP_RELEASE` |
 | Kit files appear in the PCK | Check `exclude_filter` and exact tokens `build/*` and `godot-to-aurora/*` |
 
-The complete table is in [AGENTS.md § 5](AGENTS.md#5-troubleshooting) and
+The complete table is in [AGENTS.md § 5](AGENTS.md#5-траблшутинг) and
 [docs/SDK_5_2_ARCHITECTURE.md](docs/SDK_5_2_ARCHITECTURE.md).
 
 ---
