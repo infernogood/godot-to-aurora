@@ -7,6 +7,39 @@
 Версия кита хранится в [`versions.env`](versions.env) (`KIT_VERSION`) и печатается
 любым скриптом по флагу `--version`.
 
+## [1.1.2] — 2026-11-28
+
+Совместимость с реальным APM Aurora OS 5.2.1.200 по итогам живого портирования игры.
+
+### Fixed
+
+- APM `BadPackageContent`: лицензии кладутся в `/usr/share/<pkg>/` вместо
+  `/usr/share/licenses/<pkg>/`, макрос `%license` из spec и шаблона удалён; `Comment=`
+  в `.desktop` гарантированно непустой (дефолт — `APP_TITLE`).
+- `deploy_emulator.sh`: `gdbus call` в `sfdk device exec` передаётся раздельными
+  аргументами — в SDK 5.2 нет удалённого shell, и склейка через `printf %q` ломала
+  установку.
+- `deploy_emulator.sh`: факт установки и `VERSION-RELEASE` проверяются по реестру
+  `/var/lib/apm/registry` (fallback — `.desktop` и `/opt/app/<pkg>/current`);
+  `rpm -q` больше не используется, т.к. APM не пишет в системный `rpmdb`. На ответ
+  `SamePackageIsInstalled` печатается подсказка поднять `APP_RELEASE`.
+- `build_x86_64_rpm.sh`: при краше экспортёра после записи PCK (например, SIGABRT 134)
+  выводится диагностика с подсказкой очистить устаревший кэш `.godot/` стокового
+  редактора.
+- `$(xkbcommon_license_file)`: все логи и прогресс загрузки уходят в `stderr`, в
+  `stdout` — строго путь к файлу лицензии.
+- `aurora_lifecycle.gd`: `_apply_orientation()` не вызывает смену ориентации вне
+  мобильных платформ — на десктопе больше нет дублирующихся
+  `WARNING: Orientation not supported by this display server`.
+- `.gdignore` добавлен в репозиторий, чтобы Godot не сканировал каталог кита.
+
+### Changed
+
+- `KIT_VERSION` — `1.1.2`; `AGENTS.md` и `docs/SDK_5_2_ARCHITECTURE.md` фиксируют
+  контракт APM 5.2+ (запрет `/usr/share/licenses/`, прямой `argv`, реестр вместо
+  `rpmdb`), ограничения глифов `Liberation` при `fontconfig=no` и приёмку со
+  скриншотом из самой игры.
+
 ## [1.1.1] — 2026-11-27
 
 Исправления по итогам code review: предсказуемый деплой и выбор RPM, устойчивые парсеры и

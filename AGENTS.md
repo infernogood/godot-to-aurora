@@ -93,7 +93,9 @@ ETC2/ASTC. Vulkan на устройстве недоступен.
 руками, сравнивай точный токен: `mybuild/*` — не `build/*`.
 
 **Шрифты.** Шаблоны собраны с `fontconfig=no`: `SystemFont` и системные шрифты на
-устройстве не работают. Только `.ttf` внутри проекта (§1).
+устройстве не работают. Только `.ttf` внутри проекта (§1). В `Liberation` нет эмодзи и
+спецсимволов (`⏸`, `⌖` и т. п.): при `fontconfig=no` они дают пустые глифы — рисуй
+такие значки примитивами (`draw_*`/`Control`) или подключай шрифт с нужными глифами.
 
 **Сохранения.** Только `user://` → `~/.local/share/<org>/<app>/`, `res://` read-only.
 Пиши через `SaveService` (атомарный `tmp` + `rename`).
@@ -128,6 +130,28 @@ ETC2/ASTC. Vulkan на устройстве недоступен.
 ошибку. Неизвестная версия `libxkbcommon` требует записи в
 `XKBCOMMON_KNOWN_VERSIONS` либо явного `--skip-checksum`.
 
+### Контракт APM 5.2+ (не откатывать под требования классического RPM / rpmlint)
+
+- **Запрет `/usr/share/licenses/` и макроса `%license`:** валидатор контента APM 5.2
+  отклоняет любые файлы в `/usr/share/licenses/<pkg>/` с ошибкой
+  `ru.omp.APM.Error.BadPackageContent` (`Installation not allowed in this location`).
+  Клади `LICENSE.Godot` и `LICENSE.libxkbcommon` строго внутрь `/usr/share/<pkg>/`
+  (покрывается `%{_datadir}/%{name}` в `%files`) и не возвращай `%license`, даже если
+  этого потребуют статический ревьюер или rpmlint. Поле `Comment=` в `.desktop` обязано
+  быть непустым (при отсутствии `APP_COMMENT` подставляй дефолт, например `APP_TITLE`).
+- **Прямой `argv` в `sfdk device exec` (без удалённого shell):** в отличие от
+  `tools/run`, команда `sfdk device exec` в SDK 5.2 передаёт аргументы напрямую как
+  отдельные элементы `argv` без обёртки в удалённый shell. Склейка аргументов в одну
+  строку (через `printf %q` / `device_exec_quoted`) ломает запуск
+  (`bash: exec: ...: not found`). Передавай `gdbus call ... "$path" "{'ShowPrompt': <true>}"`
+  раздельными аргументами — `<true>` не раскрывается как редирект.
+- **Реестр `/var/lib/apm/registry` вместо `rpm -q`:** APM 5.2 хранит установленные
+  пакеты в собственном реестре `/var/lib/apm/registry` и не пишет их в системный
+  `rpmdb`, поэтому `rpm -q` на устройстве всегда отвечает «не установлен». Проверяй
+  факт установки и `VERSION-RELEASE` по `/var/lib/apm/registry` (и наличию `.desktop`),
+  не заменяй проверку обратно на `rpm -q`. При повторной установке той же сборки
+  (`SamePackageIsInstalled`) требуется поднять `APP_RELEASE`.
+
 ---
 
 ## 4. Минимум команд, которые надо помнить
@@ -148,7 +172,7 @@ ETC2/ASTC. Vulkan на устройстве недоступен.
 ./godot-to-aurora/scripts/deploy_emulator.sh --sign-only  # только подпись
 ```
 
-Версия кита: `./scripts/build_x86_64_rpm.sh --version` → `godot-to-aurora 1.1.0`.
+Версия кита: `./scripts/build_x86_64_rpm.sh --version` → `godot-to-aurora 1.1.2`.
 Все флаги и переменные — в `README.md` и `--help`.
 
 ---
@@ -199,4 +223,6 @@ ETC2/ASTC. Vulkan на устройстве недоступен.
 - [ ] в PCK нет файлов кита и `build/`;
 - [ ] RPM собирается, подписывается и ставится в эмулятор;
 - [ ] игра запускается с иконки меню и выживает сворачивание/разворачивание;
+- [ ] скриншот для проверки снят из самой игры (флаг вида `-- --shot=path.png`):
+      штатного CLI-скриншотера на эмуляторе нет;
 - [ ] `PLAN.md` и итоговый отчёт обновлены.
