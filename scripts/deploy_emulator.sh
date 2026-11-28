@@ -581,22 +581,39 @@ fi
 # ---------------------------------------------------------------------------
 # Установка через ru.omp.APM
 # ---------------------------------------------------------------------------
-# `sfdk device exec` передаёт команду удалённому shell, поэтому каждый
-# аргумент экранируется через printf %q: иначе, например, <true> станет
-# редиректом и gdbus получит обрезанную строку.
-device_exec_quoted() { # device_exec_quoted <args...>
-	local arg cmd=""
-	for arg in "$@"; do
-		cmd+="$(printf '%q' "$arg") "
-	done
-	sfdk_cmd device exec "${cmd% }"
-}
-
+# `sfdk device exec` в SDK 5.2 передаёт аргументы напрямую как элементы argv,
+# без удалённого shell: склейка через printf %q ломает вызов gdbus
+# ('bash: exec: ...: not found'), а <true> не раскрывается как редирект.
 kit_log "запрашиваю установку через ru.omp.APM…"
 prompt_value="<true>"
 (( SHOW_PROMPT )) || prompt_value="<false>"
-if ! device_exec_quoted gdbus call -y -d ru.omp.APM -o /ru/omp/APM \
-	-m ru.omp.APM.Install "$DEVICE_RPM_PATH" "{'ShowPrompt': $prompt_value}"; then
+install_output=""
+install_rc=0
+install_output="$(sfdk_cmd device exec gdbus call -y -d ru.omp.APM -o /ru/omp/APM \
+	-m ru.omp.APM.Install "$DEVICE_RPM_PATH" "{'ShowPrompt': $prompt_value}" 2>&1)" \
+	|| install_rc=$?
+
+# raise_release_hint — подсказка для повторной установки той же сборки.
+raise_release_hint() {
+	local next_release=2
+	if [[ "$RPM_VERSION_RELEASE" =~ ^[^-]+-([0-9]+)$ ]]; then
+		next_release=$(( BASH_REMATCH[1] + 1 ))
+	fi
+	cat >&2 <<EOF
+APM 5.2 не переустанавливает тот же VERSION-RELEASE. Поднимите релиз и пересоберите:
+  APP_RELEASE=$next_release scripts/build_x86_64_rpm.sh
+EOF
+}
+
+if grep -qF 'SamePackageIsInstalled' <<<"$install_output"; then
+	kit_err "APM ответил SamePackageIsInstalled: $PKG_FULL-$RPM_VERSION_RELEASE уже установлен."
+	raise_release_hint
+	kit_die "установка отменена: нужна сборка с другим APP_RELEASE"
+fi
+if (( install_rc != 0 )); then
+	if [[ -n "$install_output" ]]; then
+		printf '%s\n' "$install_output" >&2
+	fi
 	kit_die "запрос установки в APM завершился ошибкой.
 Пакет должен быть подписан доверенным сертификатом и доступен defaultuser:
   $DEVICE_RPM_PATH"
@@ -606,30 +623,84 @@ if (( SHOW_PROMPT )); then
 	kit_info "подтвердите диалог установки на экране эмулятора."
 fi
 
-kit_log "жду установки $PKG_FULL-$RPM_VERSION_RELEASE (до ${INSTALL_WAIT}s)…"
+# APM 5.2 не пишет установленные пакеты в системный rpmdb, поэтому `rpm -q`
+# на устройстве всегда отвечает «не установлен». Источник истины — реестр
+# /var/lib/apm/registry, с fallback на .desktop и /opt/app/<pkg>/current.
+apm_registry_record() {
+	local dump record
+	dump="$(sfdk_cmd device exec cat /var/lib/apm/registry 2>/dev/null | tr -d '\r' || true)"
+	[[ -n "$dump" ]] || return 1
+	# Реестр — JSON: склеиваем переводы строк и делим записи фигурными скобками.
+	record="$(printf '%s' "$dump" | tr -d '\n' | tr '{' '\n' \
+		| grep -iF -- "$PKG_FULL" | head -1 || true)"
+	[[ -n "$record" ]] || return 1
+	printf '%s\n' "$record"
+}
+
+# Версия-релиз установленного пакета (пустой вывод = версия не определена).
+apm_installed_version() {
+	local record version release target
+	if record="$(apm_registry_record)"; then
+		version="$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]*"' <<<"$record" \
+			| head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true)"
+		release="$(grep -oE '"release"[[:space:]]*:[[:space:]]*"?[^",}[:space:]]*' <<<"$record" \
+			| head -1 | sed -E 's/.*:[[:space:]]*"?([^"]*)$/\1/' || true)"
+		if [[ -n "$version" && -n "$release" ]]; then
+			printf '%s-%s\n' "$version" "$release"
+			return 0
+		fi
+		# Простой текстовый реестр: версия-релиз прямо в записи пакета.
+		version="$(grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?-[0-9]+' <<<"$record" | head -1 || true)"
+		if [[ -n "$version" ]]; then
+			printf '%s\n' "$version"
+			return 0
+		fi
+	fi
+	# Fallback: /opt/app/<pkg>/current — ссылка на каталог установленной версии.
+	target="$(sfdk_cmd device exec readlink -f "/opt/app/$PKG_FULL/current" 2>/dev/null \
+		| tr -d '\r' | tail -1 || true)"
+	[[ -n "$target" ]] || return 1
+	printf '%s\n' "${target##*/}"
+}
+
+# Факт установки: реестр APM, а при его недоступности — .desktop и /opt.
+device_package_present() {
+	apm_registry_record >/dev/null 2>&1 && return 0
+	sfdk_cmd device exec test -f "/usr/share/applications/$PKG_FULL.desktop" >/dev/null 2>&1 && return 0
+	sfdk_cmd device exec test -e "/opt/app/$PKG_FULL/current" >/dev/null 2>&1 && return 0
+	return 1
+}
+
 installed=""
 deadline=$((SECONDS + INSTALL_WAIT))
+kit_log "жду установки $PKG_FULL-$RPM_VERSION_RELEASE (до ${INSTALL_WAIT}s)…"
 while (( SECONDS < deadline )); do
 	# Сравниваем не только имя, но и версию-релиз собранного пакета.
-	installed="$(sfdk_cmd device exec rpm -q --queryformat '%{VERSION}-%{RELEASE}' \
-		"$PKG_FULL" 2>/dev/null | tr -d '\r' | tail -1 || true)"
+	installed="$(apm_installed_version || true)"
 	[[ "$installed" == "$RPM_VERSION_RELEASE" ]] && break
 	sleep 3
 done
 if [[ "$installed" == "$RPM_VERSION_RELEASE" ]]; then
 	kit_ok "установлен: $PKG_FULL-$installed"
 else
-	kit_err "пакет пока не установлен или на устройстве другая версия."
+	kit_err "пакет не установлен или на устройстве другая версия."
 	cat >&2 <<EOF
 Локальный пакет: $PKG_FULL-$RPM_VERSION_RELEASE
-На устройстве:   ${installed:-<нет>}
+На устройстве:   ${installed:-<не определена>}
+
+Версия читается из реестра APM (/var/lib/apm/registry): rpm -q на устройстве
+всегда отвечает «не установлен», APM 5.2 не пишет в системный rpmdb.
 
 Если менеджер пакетов показал ошибку, проверьте:
   sfdk device exec journalctl -n 200 --no-pager | grep -i -E 'apm|rpm|sign'
+  sfdk device exec cat /var/lib/apm/registry
 
 Убедитесь, что пакет на месте:
   sfdk device exec ls -l "$DEVICE_RPM_PATH"
 EOF
+	if device_package_present; then
+		raise_release_hint
+	fi
 	exit 1
 fi
 

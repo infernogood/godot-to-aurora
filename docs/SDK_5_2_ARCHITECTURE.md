@@ -194,7 +194,10 @@ WORKSPACE_DIR="$PWD" ~/AuroraOS/sdk/5.2.1.200/tools/run rpmbuild \
 (версия совпадает с 4.7.2). Он собирается как `platform=linuxbsd auroraos=yes`:
 
 * `wayland=True`, `x11=False`, `alsa=False`;
-* `fontconfig=no` (поэтому `SystemFont` на устройстве не работает);
+* `fontconfig=no` (поэтому `SystemFont` на устройстве не работает); в шрифтах
+  `Liberation` нет эмодзи и спецсимволов (`⏸`, `⌖` и т. п.) — при `fontconfig=no` они
+  дают пустые глифы, рисуй такие значки примитивами или подключай шрифт с нужными
+  глифами;
 * экспортёр платформы `AuroraOS` (RPM-экспорт, Sailjail-манифест, иконки).
 
 ### Почему нужен шаблон x86_64 «руками»
@@ -309,8 +312,20 @@ IconMode=Scale
 * `OrganizationName` + `ApplicationName` должны совпадать с `user://`-песочницей;
 * `Permissions` — только реально нужные права (нет права «читать весь FS»);
 * `Exec` должен содержать `--display-driver wayland --rendering-driver opengl3`;
+* `Comment=` обязано быть непустым: APM 5.2 отклоняет `.desktop` без описания
+  (при пустом `APP_COMMENT` кит подставляет `APP_TITLE`);
 * запуск **только с иконки меню**: консольный запуск не применяет Sailjail и
   `Orientation`.
+
+### Лицензии: `/usr/share/<pkg>/`, без `%license`
+
+Валидатор контента APM 5.2 отвергает любые файлы в `/usr/share/licenses/<pkg>/`
+с ошибкой `ru.omp.APM.Error.BadPackageContent`
+(`Installation not allowed in this location`), поэтому `LICENSE.Godot` и
+`LICENSE.libxkbcommon` кладутся строго внутрь `/usr/share/<pkg>/` (покрыто
+`%{_datadir}/%{name}` в `%files`). Макрос `%license` не возвращать, даже если
+этого потребует rpmlint или статический ревьюер: для APM классические требования
+RPM неприменимы.
 
 ### `.spec`
 
@@ -372,18 +387,40 @@ WORKSPACE_DIR="$PWD" ~/AuroraOS/sdk/5.2.1.200/tools/run rpmsign-external dump \
 scp -P 2223 -i ~/AuroraOS/vmshare/ssh/private_keys/sdk \
   build/rpmbuild/RPMS/x86_64/<pkg>.rpm defaultuser@127.0.0.1:/home/defaultuser/Downloads/
 
+# аргументы — раздельными элементами argv, без склейки через printf %q
 sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec \
   gdbus call -y -d ru.omp.APM -o /ru/omp/APM \
   -m ru.omp.APM.Install "/home/defaultuser/Downloads/<pkg>.rpm" "{'ShowPrompt': <true>}"
 ```
 
 `ShowPrompt: <true>` показывает диалог подтверждения на экране эмулятора;
-`<false>` — без диалога. После установки:
+`<false>` — без диалога.
+
+`sfdk device exec` (в отличие от `tools/run`) передаёт аргументы напрямую в `exec`, без
+обёртки в удалённый shell: склейка в одну строку через `printf %q`/
+`device_exec_quoted` ломает запуск (`bash: exec: ...: not found`), а `<true>`
+в склеенной строке ещё и выглядит как редирект.
+
+После установки проверяй факт установки и `VERSION-RELEASE` по реестру APM, а не
+`rpm -q`: APM 5.2 держит пакеты в собственном реестре `/var/lib/apm/registry` и не
+пишет их в системный `rpmdb`, поэтому `rpm -q` на устройстве всегда отвечает
+«не установлен».
 
 ```bash
-sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec rpm -q <pkg>
+# реестр APM (deploy_emulator.sh читает его через cat и парсит
+# записи вида {"name":"<pkg>","version":"X.Y.Z","release":N};
+# если чтение закрыто — fallback по .desktop и /opt/app)
+sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec \
+  cat /var/lib/apm/registry
+sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec \
+  ls /usr/share/applications/<org>.<app>.desktop
+sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec \
+  ls -l /opt/app/<org>.<app>/current
 sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec journalctl -f
 ```
+
+Если APM ответил `SamePackageIsInstalled`, значит та же сборка уже стоит — подними
+`APP_RELEASE` в `versions.env` (или флагом сборки) и собери пакет заново.
 
 Типичные ошибки APM:
 
@@ -391,6 +428,8 @@ sfdk -c device="Aurora OS эмулятор 5.2.1.200" device exec journalctl -f
 |---|---|
 | «Пакет не имеет подписи разработчика» | RPM не подписан либо подпись не попала в файл |
 | `ru.omp.APM.Error.FileNotFound` | неверный путь; APM видит `/home/defaultuser/Downloads/...` |
+| `ru.omp.APM.Error.BadPackageContent` | файл в запретном месте (`/usr/share/licenses/<pkg>/`), пустой `Comment=` в `.desktop` |
+| `SamePackageIsInstalled` | та же сборка уже установлена — поднять `APP_RELEASE` |
 | отказ после установки | архитектура пакета не совпадает (x86_64 в устройство/aarch64 в эмулятор) |
 
 ---
@@ -479,8 +518,11 @@ WORKSPACE_DIR="$PWD" ~/AuroraOS/sdk/5.2.1.200/tools/run \
 # устройство/эмулятор
 sfdk device list
 sfdk -c device="<имя>" device exec uname -m
-sfdk -c device="<имя>" device exec rpm -q <pkg>
+sfdk -c device="<имя>" device exec cat /var/lib/apm/registry
 sfdk -c device="<имя>" device exec journalctl -f -t <pkg>
+
+# скриншот снимай из самой игры: штатного CLI-скриншотера в эмуляторе нет
+./<org>.<app> --main-pack /usr/share/<pkg>/<pkg>.pck -- --shot=path.png
 ```
 
 ---

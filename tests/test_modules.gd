@@ -25,6 +25,7 @@ func _initialize() -> void:
 	_test_save_service()
 	_test_lifecycle()
 	_test_regressions_111()
+	_test_regressions_112()
 	print("")
 	print("проверок: %d, провалов: %d" % [_checks, _failures])
 	if _failures > 0:
@@ -377,3 +378,54 @@ func _test_regressions_111() -> void:
 	)
 	ProjectSettings.set_setting(size_w, prev_w)
 	ProjectSettings.set_setting(size_h, prev_h)
+
+
+# ---------------------------------------------------------------------------
+# Регрессии 1.1.2: ориентация на десктопе — no-op.
+# ---------------------------------------------------------------------------
+func _test_regressions_112() -> void:
+	_section("AuroraLifecycle: ориентация на десктопе")
+	var key := "display/window/handheld/orientation"
+	var prev_value: Variant = ProjectSettings.get_setting(key, 0)
+	# На десктопе смена ориентации не поддерживается: _apply_orientation()
+	# обязан выйти до DisplayServer, иначе на каждый вызов движок печатает
+	# WARNING: Orientation not supported by this display server.
+	_check(not LifecycleScript.is_mobile_platform(), "headless не считается мобильной платформой")
+	_check(not OS.has_feature("auroraos"), "в headless нет признака auroraos")
+	_check_eq(DisplayServer.get_name(), "headless", "тест идёт под headless-сервером дисплея")
+
+	var orientation_before: int = DisplayServer.screen_get_orientation()
+	ProjectSettings.set_setting(key, DisplayServer.SCREEN_PORTRAIT)
+	var life := LifecycleScript.new()
+	life.apply_project_orientation()
+	_check_eq(
+		life.get_orientation(),
+		int(DisplayServer.SCREEN_PORTRAIT),
+		"apply_project_orientation() читает значение из ProjectSettings",
+	)
+	_check_eq(
+		DisplayServer.screen_get_orientation(),
+		orientation_before,
+		"apply_project_orientation() не меняет ориентацию экрана на десктопе",
+	)
+	life.apply_project_orientation()
+	_check_eq(
+		DisplayServer.screen_get_orientation(),
+		orientation_before,
+		"повторный apply_project_orientation() тоже не меняет ориентацию экрана",
+	)
+	life.free()
+
+	# В headless WARNING движка не виден тесту, поэтому guard закрепляем и
+	# структурно: выход по is_mobile_platform() стоит до DisplayServer.
+	var source := FileAccess.get_file_as_string("res://scripts/aurora/aurora_lifecycle.gd")
+	var body_at := source.find("func _apply_orientation()")
+	var guard_at := source.find("if not is_mobile_platform():", body_at)
+	var call_at := source.find("screen_set_orientation", body_at)
+	_check(body_at >= 0, "_apply_orientation() найден в модуле")
+	_check(guard_at >= 0, "в _apply_orientation() есть guard is_mobile_platform()")
+	_check(
+		guard_at >= 0 and call_at > guard_at,
+		"guard стоит до DisplayServer.screen_set_orientation",
+	)
+	ProjectSettings.set_setting(key, prev_value)

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# shellcheck disable=SC2016 # в grep-паттернах $ и ${...} — литералы шаблонов
 #
 # tests/test_cli.sh — CLI-контракт кита godot-to-aurora.
 #
@@ -106,6 +107,40 @@ check_regex() { # check_regex <описание> <текст> <ERE>
 	fi
 }
 
+check_not_contains() { # check_not_contains <описание> <текст> <подстрока>
+	if [[ "$2" != *"$3"* ]]; then
+		pass "$1"
+	else
+		fail "$1 (в выводе есть '$3')"
+	fi
+}
+
+check_file_contains() { # check_file_contains <описание> <файл> <подстрока>
+	if grep -qF -- "$3" "$2" 2>/dev/null; then
+		pass "$1"
+	else
+		fail "$1 (в $(basename -- "$2") нет '$3')"
+	fi
+}
+
+check_absent() { # check_absent <описание> <файл|каталог> <подстрока>
+	if grep -rqF -- "$3" "$2" 2>/dev/null; then
+		fail "$1 (найдено '$3' в $2)"
+	else
+		pass "$1"
+	fi
+}
+
+# Тело функции из скрипта без запуска самого скрипта: структурные регрессии
+# проверяют код там, где живой прогон требует сети/SDK.
+extract_function() { # extract_function <файл> <имя функции>
+	awk -v name="$2" '
+		$0 ~ "^" name "\\(\\) \\{$" { inside = 1 }
+		inside { print }
+		inside && /^}$/ { exit }
+	' "$1"
+}
+
 path_exists() { # path_exists <путь> -> yes|no
 	if [[ -e "$1" ]]; then
 		printf 'yes'
@@ -126,6 +161,12 @@ count_matches() { # count_matches <файл> <ERE>
 	printf '%s\n' "${count:-0}"
 }
 
+count_backslashes() { # count_backslashes <файл> — сколько строк содержат \
+	local count
+	count="$(grep -cF -- "\\" "$1" 2>/dev/null || true)"
+	printf '%s\n' "${count:-0}"
+}
+
 new_project() { # new_project <каталог>
 	mkdir -p "$1"
 	cat > "$1/project.godot" <<'EOF'
@@ -139,25 +180,59 @@ EOF
 }
 
 # Моки sfdk/rpm/scp для deploy_emulator.sh: устройство-эмулятор, метаданные
-# тестового пакета и «установленная» версия из $MOCK_INSTALLED_VERSION.
+# тестового пакета (локальный `rpm -qp`) и реестр APM на устройстве.
 write_deploy_mocks() { # write_deploy_mocks <каталог для исполняемых файлов>
 	local bindir="$1"
 	mkdir -p "$bindir"
 
 	cat > "$bindir/sfdk" <<'MOCK_SFDK'
 #!/usr/bin/env bash
-# Мок sfdk: одно устройство-эмулятор и запрос версии пакета на устройстве.
-case "$*" in
+# Мок sfdk: одно устройство-эмулятор и реестр APM вместо rpmdb.
+# `rpm -q` на устройстве всегда отвечает «не установлен»: APM 5.2 не пишет в
+# системный rpmdb, поэтому версию даёт только /var/lib/apm/registry
+# (MOCK_APM_REGISTRY). MOCK_GDBUS_OUTPUT/MOCK_GDBUS_RC — ответ установки.
+joined="$*"
+if [[ -n "${MOCK_SFDK_LOG:-}" ]]; then
+	printf '%s\n' "$joined" >> "$MOCK_SFDK_LOG"
+fi
+case "$joined" in
 	*"device list"*)
 		printf '#0  "AuroraEmulator"\n'
 		printf '    Type: эмулятор\n'
 		printf '    Host name: defaultuser@127.0.0.1:2223\n'
 		;;
 	*"emulator list"*) printf 'AuroraEmulator\n' ;;
-	*"device exec"*)
-		case "$*" in
-			*"rpm -q"*) printf '%s\n' "${MOCK_INSTALLED_VERSION:-1.2.3-1}" ;;
-		esac
+	*"gdbus call"*)
+		# argv пишется как есть: тест проверяет, что аргументы пришли
+		# раздельными элементами, без склейки через printf %q.
+		if [[ -n "${MOCK_GDBUS_ARGV_LOG:-}" ]]; then
+			printf '%s\n' "$@" > "$MOCK_GDBUS_ARGV_LOG"
+		fi
+		if [[ -n "${MOCK_GDBUS_OUTPUT:-}" ]]; then
+			printf '%s\n' "$MOCK_GDBUS_OUTPUT"
+		fi
+		exit "${MOCK_GDBUS_RC:-0}"
+		;;
+	*"cat /var/lib/apm/registry"*)
+		if [[ -n "${MOCK_APM_REGISTRY:-}" ]]; then
+			printf '%s\n' "$MOCK_APM_REGISTRY"
+		fi
+		;;
+	*"readlink -f"*)
+		if [[ -n "${MOCK_APP_CURRENT:-}" ]]; then
+			printf '%s\n' "$MOCK_APP_CURRENT"
+		fi
+		;;
+	*"test -f"*|*"test -e"*)
+		if [[ "${MOCK_DESKTOP_PRESENT:-0}" == "1" ]]; then
+			exit 0
+		fi
+		exit 1
+		;;
+	*"rpm -q"*)
+		# APM 5.2 не ведёт системный rpmdb: пакет «не установлен».
+		printf '%s: не установлен\n' "${MOCK_RPM_NAME:-ru.test.smoke}" >&2
+		exit 1
 		;;
 esac
 exit 0
@@ -747,21 +822,31 @@ test_fetch_force_bad_checksum() {
 }
 
 # ---------------------------------------------------------------------------
-# 16. deploy_emulator.sh: дефолтный SSH-ключ и сверка VERSION-RELEASE.
+# 16. deploy_emulator.sh: дефолтный SSH-ключ и установка по реестру APM.
 # ---------------------------------------------------------------------------
-test_deploy_check_and_version() {
-	printf '\n[16] deploy_emulator.sh: ключ SDK и VERSION-RELEASE\n'
-	local sandbox="$TMP_ROOT/deploy"
-	local proj="$sandbox/project"
-	mkdir -p "$proj" "$sandbox/sdk/vmshare/ssh/private_keys"
-	new_project "$proj"
-	write_deploy_mocks "$sandbox/bin"
-	local key="$sandbox/sdk/vmshare/ssh/private_keys/sdk"
-	: > "$key"
-	local rpm_file="$sandbox/smoke.rpm"
-	printf 'тестовый RPM\n' > "$rpm_file"
+# Установленная версия читается из /var/lib/apm/registry (APM 5.2 не пишет в
+# системный rpmdb): `rpm -q` на устройстве всегда пуст. Успех = VERSION-RELEASE
+# из реестра совпал с локальным `rpm -qp`.
+APM_REGISTRY_MATCH='{"name":"ru.test.smoke","version":"1.2.3","release":1,"arch":"x86_64"}'
+APM_REGISTRY_OTHER='{"name":"ru.test.smoke","version":"1.2.3","release":9,"arch":"x86_64"}'
 
-	local -a deploy_env=(
+# deploy_run <sandbox> <proj> <rpm> [KEY=VALUE ...] -- [опции deploy_emulator.sh]
+# Результат — в глобальных DEPLOY_OUT (stdout+stderr) и DEPLOY_RC.
+DEPLOY_OUT=""
+DEPLOY_RC=0
+deploy_run() {
+	local sandbox="$1" proj="$2" rpm_file="$3"
+	shift 3
+	local -a extra_env=() deploy_args=()
+	while (( $# > 0 )) && [[ "$1" != "--" ]]; do
+		extra_env+=("$1")
+		shift
+	done
+	if [[ "${1:-}" == "--" ]]; then
+		shift
+		deploy_args=("$@")
+	fi
+	local -a run_env=(
 		env -i
 		"PATH=$sandbox/bin:$PATH"
 		"HOME=$sandbox/home"
@@ -772,32 +857,232 @@ test_deploy_check_and_version() {
 		"GAME_DIR=$proj"
 		"BUILD_DIR=$proj/build"
 	)
+	if (( ${#extra_env[@]} > 0 )); then
+		run_env+=("${extra_env[@]}")
+	fi
+	DEPLOY_RC=0
+	DEPLOY_OUT="$("${run_env[@]}" bash "$DEPLOY_SCRIPT" --rpm "$rpm_file" \
+		"${deploy_args[@]}" 2>&1)" || DEPLOY_RC=$?
+}
 
-	local out rc=0
-	out="$("${deploy_env[@]}" bash "$DEPLOY_SCRIPT" --check --rpm "$rpm_file" 2>&1)" || rc=$?
-	check_eq "deploy --check: код возврата" "0" "$rc"
-	check_contains "deploy --check: найден дефолтный SSH-ключ SDK" "$out" "key=$key"
-	check_regex "deploy --check: версия-релиз из rpm -qp" "$out" \
+test_deploy_check_and_version() {
+	printf '\n[16] deploy_emulator.sh: ключ SDK и установка по реестру APM\n'
+	local sandbox="$TMP_ROOT/deploy"
+	local proj="$sandbox/project"
+	mkdir -p "$proj" "$sandbox/sdk/vmshare/ssh/private_keys"
+	new_project "$proj"
+	write_deploy_mocks "$sandbox/bin"
+	local key="$sandbox/sdk/vmshare/ssh/private_keys/sdk"
+	: > "$key"
+	local rpm_file="$sandbox/smoke.rpm"
+	printf 'тестовый RPM\n' > "$rpm_file"
+
+	deploy_run "$sandbox" "$proj" "$rpm_file" -- --check
+	check_eq "deploy --check: код возврата" "0" "$DEPLOY_RC"
+	check_contains "deploy --check: найден дефолтный SSH-ключ SDK" "$DEPLOY_OUT" "key=$key"
+	check_regex "deploy --check: версия-релиз из rpm -qp" "$DEPLOY_OUT" \
 		'^Версия пакета[[:space:]]+1\.2\.3-1$'
-	check_contains "deploy --check: SSH-эндпоинт из sfdk device list" "$out" \
+	check_contains "deploy --check: SSH-эндпоинт из sfdk device list" "$DEPLOY_OUT" \
 		"defaultuser@127.0.0.1:2223"
 
-	rc=0
-	out="$("${deploy_env[@]}" "MOCK_INSTALLED_VERSION=1.2.3-1" bash "$DEPLOY_SCRIPT" \
-		--rpm "$rpm_file" --skip-sign --no-start --no-prompt --install-wait 1 2>&1)" || rc=$?
-	check_eq "deploy: установка при совпадении версии: код возврата" "0" "$rc"
-	check_contains "deploy: ok-сообщение содержит VERSION-RELEASE" "$out" \
+	# Успешная установка: реестр APM отдаёт ту же версию-релиз, что и локальный RPM.
+	local sfdk_log="$sandbox/sfdk-match.log"
+	local argv_log="$sandbox/gdbus.argv"
+	deploy_run "$sandbox" "$proj" "$rpm_file" \
+		"MOCK_APM_REGISTRY=$APM_REGISTRY_MATCH" "MOCK_SFDK_LOG=$sfdk_log" \
+		"MOCK_GDBUS_ARGV_LOG=$argv_log" \
+		-- --skip-sign --no-start --no-prompt --install-wait 1
+	check_eq "deploy: установка при совпадении версии в реестре APM: код возврата" \
+		"0" "$DEPLOY_RC"
+	check_contains "deploy: ok-сообщение содержит VERSION-RELEASE из реестра" "$DEPLOY_OUT" \
 		"установлен: ru.test.smoke-1.2.3-1"
+	check_ne "deploy: версия читается из /var/lib/apm/registry" "0" \
+		"$(count_matches "$sfdk_log" 'cat /var/lib/apm/registry')"
+	check_eq "deploy: rpm -q на устройстве не опрашивается" "0" \
+		"$(count_matches "$sfdk_log" 'rpm -q')"
 
-	# Расхождение версии-релиза не должно считаться успешной установкой.
-	rc=0
-	out="$("${deploy_env[@]}" "MOCK_INSTALLED_VERSION=1.2.3-9" bash "$DEPLOY_SCRIPT" \
-		--rpm "$rpm_file" --skip-sign --no-start --no-prompt --install-wait 1 2>&1)" || rc=$?
-	check_ne "deploy: другая версия на устройстве -> код возврата != 0" "0" "$rc"
-	check_contains "deploy: показан локальный пакет" "$out" \
+	# gdbus вызывается напрямую: аргументы — отдельные элементы argv.
+	# Если бы скрипт склеивал их через printf %q, в логе была бы одна строка
+	# с экранированием, а не ровно 15 элементов.
+	check_eq "deploy: gdbus-вызов разбит на 15 элементов argv" "15" \
+		"$(wc -l < "$argv_log" | tr -d ' ')"
+	check_eq "deploy: device exec — отдельные элементы argv" "device exec" \
+		"$(sed -n '3,4p' "$argv_log" | paste -sd' ' -)"
+	check_eq "deploy: --no-prompt → {'ShowPrompt': <false>} одним аргументом" "1" \
+		"$(count_exact_lines "$argv_log" "{'ShowPrompt': <false>}")"
+	check_eq "deploy: в argv нет экранирования printf %q" "0" \
+		"$(count_backslashes "$argv_log")"
+
+	local argv_prompt="$sandbox/gdbus-prompt.argv"
+	deploy_run "$sandbox" "$proj" "$rpm_file" \
+		"MOCK_APM_REGISTRY=$APM_REGISTRY_MATCH" "MOCK_GDBUS_ARGV_LOG=$argv_prompt" \
+		-- --skip-sign --no-start --install-wait 1
+	check_eq "deploy: показ диалога по умолчанию: код возврата" "0" "$DEPLOY_RC"
+	check_eq "deploy: {'ShowPrompt': <true>} пришёл одним аргументом" "1" \
+		"$(count_exact_lines "$argv_prompt" "{'ShowPrompt': <true>}")"
+	check_eq "deploy: <true> не раскрыт как редирект и не экранирован" "0" \
+		"$(count_backslashes "$argv_prompt")"
+	check_absent "deploy: device_exec_quoted удалён из scripts/" "$REPO_ROOT/scripts" \
+		"device_exec_quoted"
+
+	# Расхождение версии-релиза в реестре не должно считаться установкой.
+	deploy_run "$sandbox" "$proj" "$rpm_file" \
+		"MOCK_APM_REGISTRY=$APM_REGISTRY_OTHER" \
+		-- --skip-sign --no-start --no-prompt --install-wait 1
+	check_ne "deploy: другая версия в реестре -> код возврата != 0" "0" "$DEPLOY_RC"
+	check_contains "deploy: сказано «пакет не установлен или другая версия»" "$DEPLOY_OUT" \
+		"пакет не установлен или на устройстве другая версия"
+	check_contains "deploy: показан локальный пакет" "$DEPLOY_OUT" \
 		"Локальный пакет: ru.test.smoke-1.2.3-1"
-	check_contains "deploy: показана версия на устройстве" "$out" \
+	check_contains "deploy: показана версия из реестра на устройстве" "$DEPLOY_OUT" \
 		"На устройстве:   1.2.3-9"
+	check_contains "deploy: пояснение про реестр вместо rpm -q" "$DEPLOY_OUT" \
+		"rpm -q на устройстве"
+
+	# SamePackageIsInstalled: APM 5.2 не переустанавливает ту же сборку.
+	deploy_run "$sandbox" "$proj" "$rpm_file" \
+		"MOCK_GDBUS_OUTPUT=(false, 'ru.omp.APM.Error.SamePackageIsInstalled')" \
+		-- --skip-sign --no-start --no-prompt --install-wait 1
+	check_ne "deploy: SamePackageIsInstalled -> код возврата != 0" "0" "$DEPLOY_RC"
+	check_contains "deploy: ответ SamePackageIsInstalled назван в ошибке" "$DEPLOY_OUT" \
+		"SamePackageIsInstalled"
+	check_contains "deploy: подсказка поднять APP_RELEASE" "$DEPLOY_OUT" \
+		"APP_RELEASE=2 scripts/build_x86_64_rpm.sh"
+	check_contains "deploy: подсказка «Поднимите релиз»" "$DEPLOY_OUT" "Поднимите релиз"
+	check_not_contains "deploy: SamePackageIsInstalled не выдаёт успех" "$DEPLOY_OUT" \
+		"установлен: ru.test.smoke"
+}
+
+# ---------------------------------------------------------------------------
+# 19. APM 5.2: лицензии внутри /usr/share/<pkg>, без %license в spec.
+# ---------------------------------------------------------------------------
+# Живая сборка RPM требует SDK/rpmbuild, поэтому рендерим сам шаблон spec
+# и дополнительно закрепляем структуру кода сборки (LICENSE_DIR).
+test_spec_licenses() {
+	printf '\n[19] spec и лицензии в APM 5.2\n'
+	local dir="$TMP_ROOT/spec"
+	mkdir -p "$dir"
+	local spec="$dir/app.spec"
+	kit_helper "$dir" kit_render_template "$REPO_ROOT/templates/app.spec.in" "$spec" \
+		'PKG_NAME=ru.test.smoke' \
+		'SUMMARY=Smoke Game' \
+		'VERSION=1.2.3' \
+		'RELEASE=1' \
+		'LICENSE=Proprietary' \
+		'DESCRIPTION=Smoke Game - игра на Godot' \
+		'CHANGELOG_DATE=Mon Jan 01 2025' \
+		'REQUIRES_EXCLUDE=' >/dev/null
+
+	check_eq "spec: нет макроса %license" "0" "$(count_matches "$spec" '%license')"
+	check_eq "spec: нет /usr/share/licenses/" "0" \
+		"$(count_matches "$spec" '/usr/share/licenses/')"
+	check_eq "spec: папка пакета /usr/share/<pkg> покрыта %files" "1" \
+		"$(count_exact_lines "$spec" '%{_datadir}/%{name}')"
+
+	# Лицензии кладутся внутрь /usr/share/$PKG_FULL: этот путь уже в %files.
+	check_eq "build: LICENSE_DIR = /usr/share/\$PKG_FULL" "1" \
+		"$(count_exact_lines "$BUILD_X86_SCRIPT" 'LICENSE_DIR="$RPMBUILD/files/usr/share/$PKG_FULL"')"
+	check_file_contains "build: LICENSE.Godot готовится в LICENSE_DIR" \
+		"$BUILD_X86_SCRIPT" '"$LICENSE_DIR/LICENSE.Godot"'
+	check_file_contains "build: LICENSE.libxkbcommon ставится в LICENSE_DIR" \
+		"$BUILD_X86_SCRIPT" '"$LICENSE_DIR/LICENSE.libxkbcommon"'
+	check_absent "templates: нет /usr/share/licenses/" "$REPO_ROOT/templates" \
+		'/usr/share/licenses/'
+	check_absent "templates: нет макроса %license" "$REPO_ROOT/templates" '%license'
+}
+
+# ---------------------------------------------------------------------------
+# 20. APM 5.2: .desktop с пустым Comment= отвергается — нужен дефолт.
+# ---------------------------------------------------------------------------
+test_empty_app_comment() {
+	printf '\n[20] .desktop: непустой Comment= при пустом APP_COMMENT\n'
+	local proj="$TMP_ROOT/comment-project"
+	new_project "$proj"
+
+	# kit_load_package_params: пустой APP_COMMENT подменяется названием игры.
+	local comment
+	comment="$(
+		APP_COMMENT=""
+		PERMISSIONS="Audio"
+		export APP_COMMENT PERMISSIONS
+		PROJECT_ROOT="$proj"
+		GAME_DIR="$proj"
+		BUILD_DIR="$TMP_ROOT/common-build"
+		export PROJECT_ROOT GAME_DIR BUILD_DIR
+		# shellcheck disable=SC1090 # путь вычисляется, репозиторий переносим
+		source "$COMMON_LIB"
+		# Загрузка параметров логирует в stdout — в результат идёт только значение.
+		kit_load_package_params >/dev/null 2>&1
+		printf '%s' "$PKG_COMMENT"
+	)"
+	check_eq "пустой APP_COMMENT → Comment из названия игры" "Smoke Game" "$comment"
+
+	local dir="$TMP_ROOT/comment-desktop"
+	mkdir -p "$dir"
+	local desktop="$dir/ru.test.smoke.desktop"
+	kit_helper "$dir" kit_render_template "$REPO_ROOT/templates/app.desktop.in" "$desktop" \
+		'APP_TITLE=Smoke Game' \
+		"APP_COMMENT=$comment" \
+		'PKG_NAME=ru.test.smoke' \
+		'ORG=ru.test' \
+		'APP=smoke' \
+		'PERMISSIONS=Audio' \
+		'ORIENTATION=Landscape' \
+		'APP_CATEGORIES=Game' >/dev/null
+	check_eq ".desktop: Comment= непустой" "1" "$(count_exact_lines "$desktop" 'Comment=Smoke Game')"
+	check_eq ".desktop: пустого Comment= нет" "0" "$(count_exact_lines "$desktop" 'Comment=')"
+
+	check_file_contains "build: fallback Comment на PKG_TITLE" "$BUILD_X86_SCRIPT" \
+		'desktop_comment="${PKG_COMMENT:-$PKG_TITLE}"'
+	check_file_contains "build: последний fallback Comment на PKG_FULL" \
+		"$BUILD_X86_SCRIPT" 'desktop_comment="$PKG_FULL"'
+	check_file_contains "build: sed вырезает только пустые Permissions=" \
+		"$BUILD_X86_SCRIPT" '/^Permissions=$/d'
+	check_absent "build: строка Comment= не вырезается" "$BUILD_X86_SCRIPT" '^Comment=$/d'
+}
+
+# ---------------------------------------------------------------------------
+# 21. xkbcommon_license_file: в stdout только путь.
+# ---------------------------------------------------------------------------
+# Живой прогон холодного кэша невозможен: нужны сеть и архив xkbcommon
+# (SDK/CI без сети). Поэтому регрессия структурная — код загрузки обёрнут в
+# блок `} >&2`, а после него в stdout ровно один printf с путём.
+test_xkbcommon_license_stdout() {
+	printf '\n[21] xkbcommon_license_file: stdout без логов\n'
+	local body after_block
+	body="$(extract_function "$BUILD_X86_SCRIPT" xkbcommon_license_file)"
+	check_ne "xkbcommon_license_file найден в build_x86_64_rpm.sh" "" "$body"
+	check_contains "холодный путь скачивает архив" "$body" "download_xkbcommon_archive"
+	check_contains "холодный путь распаковывает LICENSE" "$body" 'libxkbcommon-${base}/LICENSE'
+	check_contains "кэш кладётся в BUILD_DIR/.licenses" "$body" '.licenses'
+	check_eq "шум холодного пути завёрнут в блочный redirect stderr" "1" \
+		"$(grep -cE '^[[:space:]]*\} >&2$' <<<"$body")"
+
+	after_block="$(awk '
+		/^[[:space:]]*\} >&2$/ { seen = 1; next }
+		seen && /^}$/ { exit }
+		seen
+	' <<<"$body" | sed -e 's/^[[:space:]]*//' -e '/^$/d')"
+	check_eq "после блока в stdout — ровно одна строка" "1" \
+		"$(grep -c . <<<"$after_block")"
+	check_eq "stdout после блока — printf пути" "printf '%s\\n' \"\$cached\"" "$after_block"
+}
+
+# ---------------------------------------------------------------------------
+# 22. .gdignore в рабочем дереве и в индексе git.
+# ---------------------------------------------------------------------------
+test_gdignore_tracked() {
+	printf '\n[22] .gdignore: рабочее дерево и индекс git\n'
+	local gdignore="$REPO_ROOT/.gdignore"
+	check_eq ".gdignore есть в рабочем дереве" "yes" "$(path_exists "$gdignore")"
+	if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+		check_ne ".gdignore отслеживается git (ls-files)" "" \
+			"$(git -C "$REPO_ROOT" ls-files --cached -- .gdignore 2>/dev/null)"
+	else
+		printf '  SKIP  .gdignore в индексе: нет git-репозитория\n'
+	fi
+	# Godot проверяет только факт наличия файла, внутри — пояснение.
+	check_file_contains ".gdignore не пустой (внутри пояснение)" "$gdignore" "Godot"
 }
 
 # ---------------------------------------------------------------------------
@@ -867,6 +1152,10 @@ test_slug_under_c_locale
 test_crlf_preset
 test_fetch_force_bad_checksum
 test_deploy_check_and_version
+test_spec_licenses
+test_empty_app_comment
+test_xkbcommon_license_stdout
+test_gdignore_tracked
 test_build_check_stock_godot
 test_render_template_single_pass
 

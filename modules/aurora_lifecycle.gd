@@ -211,6 +211,11 @@ func _leave_power_saving() -> void:
 
 
 func _apply_orientation() -> void:
+	# На десктопе (Linux/ПК) смена ориентации не поддерживается: без guard'а
+	# каждый вызов даёт дублирующийся WARNING: Orientation not supported by
+	# this display server.
+	if not is_mobile_platform():
+		return
 	if DisplayServer.get_name() == "headless":
 		return
 	# `call` keeps this module compilable on builds where the method/enum is
