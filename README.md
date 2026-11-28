@@ -2,9 +2,9 @@
 
 # godot-to-aurora
 
-### Порт игры Godot 4 на ОС Аврора при помощи ИИ-агента
+### Порт игры Godot на ОС Аврора при помощи ИИ-агента
 
-**Скопируйте каталог в проект, скажите Claude, GPT, Copilot или любому другому ИИ-агенту в любом харнесс «портируй игру на Аврору»
+**Скопируйте репозиторий в корень проекта, скажите Claude, GPT, Copilot или любому другому ИИ-агенту в любом харнесс «портируй игру на Аврору»
 и получите подписанный RPM для эмулятора и устройства. Без ручного изучения Aurora SDK.**
 
 [![CI](https://github.com/infernogood/godot-to-aurora/actions/workflows/ci.yml/badge.svg)](https://github.com/infernogood/godot-to-aurora/actions/workflows/ci.yml)
